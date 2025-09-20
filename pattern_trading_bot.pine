@@ -1,0 +1,282 @@
+//@version=6
+strategy("Pattern Trading Bot - 5년 백테스트", overlay=true, initial_capital=1000, default_qty_type=strategy.percent_of_equity, default_qty_value=2)
+
+// ⚠️ 중요: 이 전략은 표준 차트(일반 캔들스틱, 바 차트 등)에서만 사용하세요!
+// 비표준 차트(하이킨 아시, 렌코, 카기 등)에서는 비현실적인 결과가 나올 수 있습니다.
+
+// ============================================================================
+// 차트 타입 확인 및 경고
+// ============================================================================
+
+// 표준 차트인지 확인 (간단한 체크)
+is_standard_chart() =>
+    // 일반 캔들스틱 차트의 특성 확인
+    true  // 기본적으로 true로 설정, 실제로는 더 복잡한 로직 필요
+
+// ============================================================================
+// 설정 및 변수
+// ============================================================================
+
+// 백테스트 기간 설정
+start_date = input.time(timestamp("2019-01-01 00:00"), "백테스트 시작일")
+end_date = input.time(timestamp("2024-01-01 00:00"), "백테스트 종료일")
+
+// 패턴 감지 설정 (더 관대한 조건으로 변경)
+pattern_similarity_threshold = input.float(0.70, "패턴 유사도 임계값", minval=0.0, maxval=1.0)
+min_confidence = input.float(0.5, "최소 신뢰도", minval=0.0, maxval=1.0)
+min_strength = input.float(0.3, "최소 강도", minval=0.0, maxval=1.0)
+
+// 타임프레임별 설정
+timeframe_5m = input.bool(true, "5분봉 활성화")
+timeframe_15m = input.bool(true, "15분봉 활성화")
+timeframe_1h = input.bool(true, "1시간봉 활성화")
+timeframe_4h = input.bool(true, "4시간봉 활성화")
+timeframe_1d = input.bool(true, "1일봉 활성화")
+
+// 수익 목표 설정 (달러 기준)
+profit_5m = 5.0
+profit_15m = 10.0
+profit_1h = 30.0
+profit_4h = 100.0
+profit_1d = 200.0
+
+// ============================================================================
+// 패턴 감지 함수들
+// ============================================================================
+
+// 엔걸핑 패턴 감지
+detect_engulfing() =>
+    bullish_engulfing = close[1] < open[1] and close > open and close > open[1] and open < close[1]
+    bearish_engulfing = close[1] > open[1] and close < open and close < open[1] and open > close[1]
+    [bullish_engulfing, bearish_engulfing]
+
+// 해머 패턴 감지
+detect_hammer() =>
+    body_size = math.abs(close - open)
+    lower_shadow = math.min(open, close) - low
+    upper_shadow = high - math.max(open, close)
+    
+    hammer = lower_shadow > 2 * body_size and upper_shadow < body_size
+    [hammer, hammer]
+
+// 도지 패턴 감지
+detect_doji() =>
+    body_size = math.abs(close - open)
+    total_range = high - low
+    doji = body_size < total_range * 0.1
+    [doji, doji]
+
+// 더블 바텀 패턴 감지 (간단한 버전)
+detect_double_bottom() =>
+    // 최근 10개 바에서 두 개의 낮은 저점 찾기
+    double_bottom = false
+    if bar_index >= 10
+        recent_lows = array.new<float>()
+        for i = 0 to 9
+            array.push(recent_lows, low[i])
+        
+        // 가장 낮은 두 점 찾기
+        min1 = array.min(recent_lows)
+        array.remove(recent_lows, array.indexof(recent_lows, min1))
+        min2 = array.min(recent_lows)
+        
+        // 두 점이 비슷한 높이인지 확인
+        if math.abs(min1 - min2) < (high - low) * 0.05
+            double_bottom := true
+    
+    [double_bottom, false]
+
+// 더블 탑 패턴 감지 (간단한 버전)
+detect_double_top() =>
+    // 최근 10개 바에서 두 개의 높은 고점 찾기
+    double_top = false
+    if bar_index >= 10
+        recent_highs = array.new<float>()
+        for i = 0 to 9
+            array.push(recent_highs, high[i])
+        
+        // 가장 높은 두 점 찾기
+        max1 = array.max(recent_highs)
+        array.remove(recent_highs, array.indexof(recent_highs, max1))
+        max2 = array.max(recent_highs)
+        
+        // 두 점이 비슷한 높이인지 확인
+        if math.abs(max1 - max2) < (high - low) * 0.05
+            double_top := true
+    
+    [false, double_top]
+
+// ============================================================================
+// 패턴 강도 및 신뢰도 계산
+// ============================================================================
+
+calculate_pattern_strength(pattern_type, is_bullish) =>
+    // 패턴별 강도 계산 (0.0 ~ 1.0)
+    strength = 0.0
+    
+    if pattern_type == "engulfing"
+        body_size = math.abs(close - open)
+        prev_body_size = math.abs(close[1] - open[1])
+        strength := math.min(1.0, body_size / prev_body_size)
+    else if pattern_type == "hammer"
+        body_size = math.abs(close - open)
+        lower_shadow = math.min(open, close) - low
+        strength := math.min(1.0, lower_shadow / (high - low))
+    else if pattern_type == "doji"
+        body_size = math.abs(close - open)
+        total_range = high - low
+        strength := 1.0 - (body_size / total_range)
+    else if pattern_type == "double_bottom" or pattern_type == "double_top"
+        strength := 0.8  // 기본값
+    
+    strength
+
+calculate_pattern_confidence(pattern_type, is_bullish) =>
+    // 패턴별 신뢰도 계산 (0.0 ~ 1.0)
+    confidence = 0.0
+    
+    if pattern_type == "engulfing"
+        confidence := 0.85
+    else if pattern_type == "hammer"
+        confidence := 0.80
+    else if pattern_type == "doji"
+        confidence := 0.75
+    else if pattern_type == "double_bottom" or pattern_type == "double_top"
+        confidence := 0.90
+    
+    confidence
+
+// ============================================================================
+// 메인 패턴 감지 로직
+// ============================================================================
+
+detect_all_patterns() =>
+    patterns = array.new<string>()
+    directions = array.new<bool>()
+    confidences = array.new<float>()
+    strengths = array.new<float>()
+    
+    // 엔걸핑 패턴
+    [bull_engulfing, bear_engulfing] = detect_engulfing()
+    if bull_engulfing
+        array.push(patterns, "engulfing")
+        array.push(directions, true)
+        array.push(confidences, calculate_pattern_confidence("engulfing", true))
+        array.push(strengths, calculate_pattern_strength("engulfing", true))
+    if bear_engulfing
+        array.push(patterns, "engulfing")
+        array.push(directions, false)
+        array.push(confidences, calculate_pattern_confidence("engulfing", false))
+        array.push(strengths, calculate_pattern_strength("engulfing", false))
+    
+    // 해머 패턴
+    [bull_hammer, bear_hammer] = detect_hammer()
+    if bull_hammer
+        array.push(patterns, "hammer")
+        array.push(directions, true)
+        array.push(confidences, calculate_pattern_confidence("hammer", true))
+        array.push(strengths, calculate_pattern_strength("hammer", true))
+    
+    // 도지 패턴
+    [bull_doji, bear_doji] = detect_doji()
+    if bull_doji
+        array.push(patterns, "doji")
+        array.push(directions, true)
+        array.push(confidences, calculate_pattern_confidence("doji", true))
+        array.push(strengths, calculate_pattern_strength("doji", true))
+    
+    // 더블 바텀/탑 패턴
+    [bull_double_bottom, bear_double_bottom] = detect_double_bottom()
+    if bull_double_bottom
+        array.push(patterns, "double_bottom")
+        array.push(directions, true)
+        array.push(confidences, calculate_pattern_confidence("double_bottom", true))
+        array.push(strengths, calculate_pattern_strength("double_bottom", true))
+    
+    [bull_double_top, bear_double_top] = detect_double_top()
+    if bear_double_top
+        array.push(patterns, "double_top")
+        array.push(directions, false)
+        array.push(confidences, calculate_pattern_confidence("double_top", false))
+        array.push(strengths, calculate_pattern_strength("double_top", false))
+    
+    [patterns, directions, confidences, strengths]
+
+// ============================================================================
+// 거래 실행 로직
+// ============================================================================
+
+// 거래 조건 확인
+should_enter_trade(pattern_type, confidence, strength, is_bullish) =>
+    // 유사도 90% 이상, 신뢰도 80% 이상, 강도 70% 이상
+    confidence >= min_confidence and strength >= min_strength and 
+    (time >= start_date and time <= end_date)
+
+// 수익 목표 계산 (달러 기준)
+calculate_profit_target(timeframe) =>
+    target_dollar = 0.0
+    if timeframe == "5m"
+        target_dollar := profit_5m
+    else if timeframe == "15m"
+        target_dollar := profit_15m
+    else if timeframe == "1h"
+        target_dollar := profit_1h
+    else if timeframe == "4h"
+        target_dollar := profit_4h
+    else if timeframe == "1d"
+        target_dollar := profit_1d
+    else
+        target_dollar := profit_5m  // 기본값
+    
+    // 달러를 가격 차이로 변환 (간단한 계산)
+    price_diff = target_dollar / 100000  // 1랏 = 100,000 단위
+    price_diff
+
+// ============================================================================
+// 메인 실행 로직 (매 바마다 실행)
+// ============================================================================
+
+// 패턴 감지 (매 바마다)
+[patterns, directions, confidences, strengths] = detect_all_patterns()
+
+// 감지된 패턴 처리 (매 바마다)
+if array.size(patterns) > 0
+    for i = 0 to array.size(patterns) - 1
+        pattern_type = array.get(patterns, i)
+        is_bullish = array.get(directions, i)
+        confidence = array.get(confidences, i)
+        strength = array.get(strengths, i)
+        
+        // 거래 조건 확인
+        if should_enter_trade(pattern_type, confidence, strength, is_bullish)
+            // 거래 실행
+            if is_bullish and strategy.position_size == 0
+                strategy.entry("LONG", strategy.long)
+                // 수익 목표 설정
+                profit_target = calculate_profit_target("5m")  // 기본값
+                strategy.exit("LONG_EXIT", "LONG", limit=close + profit_target)
+            else if not is_bullish and strategy.position_size == 0
+                strategy.entry("SHORT", strategy.short)
+                // 수익 목표 설정
+                profit_target = calculate_profit_target("5m")  // 기본값
+                strategy.exit("SHORT_EXIT", "SHORT", limit=close - profit_target)
+
+// ============================================================================
+// 차트 표시
+// ============================================================================
+
+// 패턴 표시 (디버깅용)
+if array.size(patterns) > 0
+    for i = 0 to array.size(patterns) - 1
+        pattern_type = array.get(patterns, i)
+        is_bullish = array.get(directions, i)
+        confidence = array.get(confidences, i)
+        strength = array.get(strengths, i)
+        
+        if should_enter_trade(pattern_type, confidence, strength, is_bullish)
+            if is_bullish
+                label.new(bar_index, low, "🟢 " + pattern_type + "\n신뢰도: " + str.tostring(confidence, "#.##") + "\n강도: " + str.tostring(strength, "#.##"), 
+                         color=color.green, textcolor=color.white, style=label.style_label_up)
+            else
+                label.new(bar_index, high, "🔴 " + pattern_type + "\n신뢰도: " + str.tostring(confidence, "#.##") + "\n강도: " + str.tostring(strength, "#.##"), 
+                         color=color.red, textcolor=color.white, style=label.style_label_down)

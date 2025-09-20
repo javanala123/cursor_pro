@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>차트 테스트</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.0/dist/chartjs-chart-financial.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+    <style>
+        body { background: #1a1a1a; color: white; padding: 20px; }
+        .chart-container { width: 100%; height: 500px; background: #2a2a2a; border-radius: 10px; padding: 20px; }
+        .controls { margin: 20px 0; }
+        button { margin: 5px; padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background: #45a049; }
+    </style>
+</head>
+<body>
+    <h1>차트 테스트</h1>
+    <div class="controls">
+        <button onclick="testChart()">차트 테스트</button>
+        <button onclick="testZoom()">줌 테스트</button>
+        <button onclick="testData()">데이터 테스트</button>
+    </div>
+    <div class="chart-container">
+        <canvas id="testChart"></canvas>
+    </div>
+
+    <script>
+        let testChartInstance = null;
+
+        async function testChart() {
+            try {
+                console.log('차트 테스트 시작...');
+                
+                const ctx = document.getElementById('testChart').getContext('2d');
+                
+                // 기존 차트 제거
+                if (testChartInstance) {
+                    testChartInstance.destroy();
+                }
+                
+                // 줌 플러그인 등록
+                if (typeof ChartZoom !== 'undefined') {
+                    Chart.register(ChartZoom);
+                    console.log('줌 플러그인 등록 완료');
+                } else {
+                    console.error('줌 플러그인을 찾을 수 없습니다');
+                }
+                
+                // 테스트 데이터 생성
+                const testData = generateTestData();
+                console.log('테스트 데이터 생성:', testData.length, '개');
+                
+                // 차트 생성
+                testChartInstance = new Chart(ctx, {
+                    type: 'candlestick',
+                    data: {
+                        datasets: [{
+                            label: 'BTC/USDT',
+                            data: testData,
+                            color: {
+                                up: '#4CAF50',
+                                down: '#f44336',
+                                unchanged: '#ffc107'
+                            }
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            zoom: {
+                                zoom: {
+                                    wheel: { enabled: true, speed: 0.1 },
+                                    pinch: { enabled: true },
+                                    mode: 'x'
+                                },
+                                pan: {
+                                    enabled: true,
+                                    mode: 'x'
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { type: 'time' },
+                            y: { position: 'right' }
+                        }
+                    }
+                });
+                
+                console.log('차트 생성 완료');
+                
+            } catch (error) {
+                console.error('차트 테스트 실패:', error);
+                alert('차트 테스트 실패: ' + error.message);
+            }
+        }
+        
+        function generateTestData() {
+            const data = [];
+            const now = new Date();
+            let price = 50000;
+            
+            for (let i = 0; i < 100; i++) {
+                const time = new Date(now.getTime() - (100 - i) * 60000); // 1분 간격
+                const change = (Math.random() - 0.5) * 1000;
+                const open = price;
+                const close = price + change;
+                const high = Math.max(open, close) + Math.random() * 500;
+                const low = Math.min(open, close) - Math.random() * 500;
+                
+                data.push({
+                    x: time.getTime(),
+                    o: open,
+                    h: high,
+                    l: low,
+                    c: close
+                });
+                
+                price = close;
+            }
+            
+            return data;
+        }
+        
+        function testZoom() {
+            if (testChartInstance) {
+                console.log('줌 테스트...');
+                testChartInstance.resetZoom();
+                console.log('줌 리셋 완료');
+            } else {
+                console.error('차트가 초기화되지 않았습니다');
+            }
+        }
+        
+        function testData() {
+            console.log('데이터 테스트...');
+            const data = generateTestData();
+            console.log('생성된 데이터:', data.slice(0, 3));
+        }
+    </script>
+</body>
+</html>

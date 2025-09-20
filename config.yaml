@@ -1,0 +1,75 @@
+exchanges:
+  binance:
+    api_key: ''
+    sandbox: true
+    secret_key: ''
+  mt5:
+    login: 0
+    password: ''
+    path: ''
+    server: ''
+symbols:
+  commodities:
+  - USOILm
+  - GOLDm
+  - SILVERm
+  - NATGASm
+  - COPPERm
+  crypto:
+  - BTCUSDTm
+  - ETHUSDTm
+  - ADAUSDTm
+  - DOTUSDTm
+  - LINKUSDTm
+  forex:
+  - EURUSDm
+  - GBPUSDm
+  - USDJPYm
+  - AUDUSDm
+  - USDCADm
+  futures:
+  - ES1!m
+  - NQ1!m
+  - YM1!m
+  - RTY1!m
+  - GC1!m
+  - SI1!m
+  - CL1!m
+  - NG1!m
+timeframes:
+  5m:
+    frequency: 2
+    pips: 50
+    weight: 0.15
+  15m:
+    frequency: 1
+    pips: 75
+    weight: 0.2
+  1h:
+    frequency: 0.5
+    pips: 100
+    weight: 0.25
+  4h:
+    frequency: 0.2
+    pips: 200
+    weight: 0.2
+  1d:
+    frequency: 0.7
+    pips: 500
+    weight: 0.15
+  1w:
+    frequency: 0.14
+    pips: 1000
+    weight: 0.05
+  1M:
+    frequency: 0.03
+    pips: 2000
+    weight: 0.02
+trading:
+  initial_capital: 1000.0
+  leverage: 200
+  loss_cooldown_duration: 30
+  max_consecutive_losses: 3
+  max_lot_size: 0.1
+  max_risk_per_trade: 0.02
+  min_lot_size: 0.01

@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Pattern Trading System - Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+        
+        .status-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+        
+        .ai-analysis {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .analysis-title {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .analysis-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .analysis-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .analysis-label {
+            font-size: 0.8rem;
+            opacity: 0.8;
+        }
+        
+        .chart-container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .chart-title {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .chart {
+            width: 100%;
+            height: 300px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            opacity: 0.8;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .price-line {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #4CAF50, #2196F3, #FF9800);
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.7; }
+            50% { opacity: 1; }
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-bottom: 30px;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-primary {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+        }
+        
+        .btn-danger {
+            background: #f44336;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #da190b;
+            transform: translateY(-2px);
+        }
+        
+        .btn-info {
+            background: #2196F3;
+            color: white;
+        }
+        
+        .btn-info:hover {
+            background: #1976D2;
+            transform: translateY(-2px);
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-online {
+            background: #4CAF50;
+            box-shadow: 0 0 10px #4CAF50;
+        }
+        
+        .status-offline {
+            background: #f44336;
+            box-shadow: 0 0 10px #f44336;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid;
+        }
+        
+        .alert-success {
+            background: rgba(76, 175, 80, 0.2);
+            border-left-color: #4CAF50;
+        }
+        
+        .alert-error {
+            background: rgba(244, 67, 54, 0.2);
+            border-left-color: #f44336;
+        }
+        
+        .alert-info {
+            background: rgba(33, 150, 243, 0.2);
+            border-left-color: #2196F3;
+        }
+        
+        .trading-log {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .log-entry {
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 0.9rem;
+        }
+        
+        .log-time {
+            color: #ccc;
+            margin-right: 10px;
+        }
+        
+        .log-message {
+            color: white;
+        }
+        
+        .log-buy {
+            color: #4CAF50;
+        }
+        
+        .log-sell {
+            color: #f44336;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 AI Pattern Trading System</h1>
+            <p>진짜 AI 기반 패턴 거래 시스템 - 데모 버전</p>
+        </div>
+        
+        <div class="status-card">
+            <h2>📊 시스템 상태</h2>
+            <div class="status-grid">
+                <div class="stat-item">
+                    <div class="stat-value" id="connection-status">
+                        <span class="status-indicator status-online"></span>
+                        시뮬레이션 모드
+                    </div>
+                    <div class="stat-label">시스템 상태</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="trading-status">비활성화</div>
+                    <div class="stat-label">자동 거래</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="total-trades">0</div>
+                    <div class="stat-label">총 거래 수</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="win-rate">0%</div>
+                    <div class="stat-label">승률</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="ai-analysis">
+            <h2 class="analysis-title">🔍 AI 실시간 분석</h2>
+            <div class="analysis-grid">
+                <div class="analysis-item">
+                    <div class="analysis-value" id="ai-confidence">0%</div>
+                    <div class="analysis-label">AI 신뢰도</div>
+                </div>
+                <div class="analysis-item">
+                    <div class="analysis-value" id="pattern-similarity">0%</div>
+                    <div class="analysis-label">패턴 유사도</div>
+                </div>
+                <div class="analysis-item">
+                    <div class="analysis-value" id="expected-profit">0 pips</div>
+                    <div class="analysis-label">예상 수익</div>
+                </div>
+                <div class="analysis-item">
+                    <div class="analysis-value" id="market-sentiment">중립</div>
+                    <div class="analysis-label">시장 심리</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="chart-container">
+            <h2 class="chart-title">📈 실시간 가격 차트</h2>
+            <div class="chart" id="price-chart">
+                <div class="price-line"></div>
+                <div style="text-align: center;">
+                    <div style="font-size: 2rem; margin-bottom: 10px;" id="current-price">$50,000.00</div>
+                    <div style="font-size: 1rem; opacity: 0.8;">BTC/USDT</div>
+                    <div style="font-size: 0.9rem; opacity: 0.6; margin-top: 10px;">
+                        AI 패턴 분석 중...
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="trading-log">
+            <h2 style="margin-bottom: 20px;">📝 거래 로그</h2>
+            <div id="log-container">
+                <div class="log-entry">
+                    <span class="log-time">[시작]</span>
+                    <span class="log-message">AI Pattern Trading System 초기화 완료</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button class="btn btn-primary" onclick="startTrading()">🚀 거래 시작</button>
+            <button class="btn btn-danger" onclick="stopTrading()">⏹️ 거래 중지</button>
+            <button class="btn btn-info" onclick="refreshData()">🔄 데이터 새로고침</button>
+        </div>
+        
+        <div id="alerts"></div>
+    </div>
+
+    <script>
+        // 전역 변수
+        let isTrading = false;
+        let tradingData = {
+            totalTrades: 0,
+            winningTrades: 0,
+            losingTrades: 0,
+            winRate: 0,
+            totalProfit: 0
+        };
+        
+        let aiData = {
+            confidence: 0,
+            similarity: 0,
+            expectedProfit: 0,
+            marketSentiment: '중립'
+        };
+        
+        let currentPrice = 50000;
+        let priceHistory = [];
+        
+        // 로그 추가
+        function addLog(message, type = 'info') {
+            const logContainer = document.getElementById('log-container');
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString();
+            
+            logEntry.innerHTML = `
+                <span class="log-time">[${timeStr}]</span>
+                <span class="log-message log-${type}">${message}</span>
+            `;
+            
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+            
+            // 최대 50개 로그만 유지
+            if (logContainer.children.length > 50) {
+                logContainer.removeChild(logContainer.firstChild);
+            }
+        }
+        
+        // 거래 상태 업데이트
+        function updateTradingStatus(trading) {
+            const statusElement = document.getElementById('trading-status');
+            statusElement.textContent = trading ? '활성화' : '비활성화';
+            isTrading = trading;
+        }
+        
+        // AI 분석 데이터 업데이트
+        function updateAIData() {
+            // 랜덤 데이터 생성
+            aiData.confidence = Math.random() * 0.4 + 0.6; // 60-100%
+            aiData.similarity = Math.random() * 0.3 + 0.7; // 70-100%
+            aiData.expectedProfit = Math.random() * 80 + 20; // 20-100 pips
+            aiData.marketSentiment = Math.random() > 0.5 ? 
+                (Math.random() > 0.5 ? '상승' : '하락') : '중립';
+            
+            // DOM 요소 업데이트
+            const confidenceEl = document.getElementById('ai-confidence');
+            const similarityEl = document.getElementById('pattern-similarity');
+            const profitEl = document.getElementById('expected-profit');
+            const sentimentEl = document.getElementById('market-sentiment');
+            
+            if (confidenceEl) confidenceEl.textContent = Math.round(aiData.confidence * 100) + '%';
+            if (similarityEl) similarityEl.textContent = Math.round(aiData.similarity * 100) + '%';
+            if (profitEl) profitEl.textContent = Math.round(aiData.expectedProfit) + ' pips';
+            if (sentimentEl) sentimentEl.textContent = aiData.marketSentiment;
+            
+            console.log('AI 데이터 업데이트:', aiData);
+        }
+        
+        // 거래 데이터 업데이트
+        function updateTradingData() {
+            document.getElementById('total-trades').textContent = tradingData.totalTrades;
+            document.getElementById('win-rate').textContent = Math.round(tradingData.winRate) + '%';
+        }
+        
+        // 가격 업데이트
+        function updatePrice() {
+            // 랜덤 가격 변동 (-2% ~ +2%)
+            const change = (Math.random() - 0.5) * 0.04;
+            currentPrice = currentPrice * (1 + change);
+            
+            // 가격 히스토리 저장
+            priceHistory.push(currentPrice);
+            if (priceHistory.length > 100) {
+                priceHistory.shift();
+            }
+            
+            document.getElementById('current-price').textContent = '$' + currentPrice.toFixed(2);
+        }
+        
+        // 알림 표시
+        function showAlert(message, type) {
+            const alertsContainer = document.getElementById('alerts');
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type}`;
+            alertDiv.textContent = message;
+            alertsContainer.appendChild(alertDiv);
+            
+            // 5초 후 자동 제거
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.parentNode.removeChild(alertDiv);
+                }
+            }, 5000);
+        }
+        
+        // 거래 시작
+        function startTrading() {
+            if (isTrading) {
+                showAlert('이미 거래가 활성화되어 있습니다.', 'error');
+                return;
+            }
+            
+            updateTradingStatus(true);
+            addLog('AI 자동 거래 시작', 'info');
+            showAlert('자동 거래가 시작되었습니다!', 'success');
+        }
+        
+        // 거래 중지
+        function stopTrading() {
+            if (!isTrading) {
+                showAlert('거래가 활성화되어 있지 않습니다.', 'error');
+                return;
+            }
+            
+            updateTradingStatus(false);
+            addLog('AI 자동 거래 중지', 'info');
+            showAlert('자동 거래가 중지되었습니다.', 'info');
+        }
+        
+        // 데이터 새로고침
+        function refreshData() {
+            updateAIData();
+            updatePrice();
+            updateTradingData();
+            addLog('데이터 새로고침 완료', 'info');
+            showAlert('데이터가 새로고침되었습니다.', 'success');
+            console.log('데이터 새로고침 실행');
+        }
+        
+        // 거래 시뮬레이션
+        function simulateTrading() {
+            if (!isTrading) return;
+            
+            // 10% 확률로 거래 발생
+            if (Math.random() < 0.1) {
+                const isBuy = Math.random() > 0.5;
+                const tradeType = isBuy ? '매수' : '매도';
+                const tradeTypeClass = isBuy ? 'buy' : 'sell';
+                
+                tradingData.totalTrades++;
+                
+                // 70% 확률로 수익
+                const isProfit = Math.random() < 0.7;
+                if (isProfit) {
+                    tradingData.winningTrades++;
+                } else {
+                    tradingData.losingTrades++;
+                }
+                
+                tradingData.winRate = (tradingData.winningTrades / tradingData.totalTrades) * 100;
+                updateTradingData();
+                
+                addLog(`AI ${tradeType} 신호 발생 - ${isProfit ? '수익' : '손실'}`, tradeTypeClass);
+            }
+        }
+        
+        // 초기화
+        function init() {
+            addLog('AI Pattern Trading System 초기화 완료', 'info');
+            
+            // 초기 데이터 설정
+            updateAIData();
+            updateTradingData();
+            updatePrice();
+            
+            // 주기적으로 데이터 업데이트 (3초마다)
+            setInterval(() => {
+                updateAIData();
+                updatePrice();
+                simulateTrading();
+                addLog('AI 분석 업데이트', 'info');
+            }, 3000);
+            
+            // 가격 업데이트 (1초마다)
+            setInterval(updatePrice, 1000);
+            
+            console.log('시스템 초기화 완료');
+        }
+        
+        // 페이지 로드 시 초기화
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

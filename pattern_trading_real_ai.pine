@@ -1,0 +1,387 @@
+//@version=6
+strategy("실제 AI 기반 패턴 거래 시스템", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+
+// ============================================================================
+// 입력 매개변수
+// ============================================================================
+// AI 분석 설정
+ai_confidence_threshold = input.float(0.75, "AI 신뢰도 임계값", minval=0.1, maxval=1.0, step=0.05)
+pattern_similarity_threshold = input.float(0.7, "패턴 유사도 임계값", minval=0.1, maxval=1.0, step=0.05)
+min_profit_pips = input.int(50, "최소 수익 목표 (pips)", minval=10, maxval=500)
+
+// 패턴 분석 설정
+pattern_lookback = input.int(150, "패턴 분석 기간 (캔들)", minval=50, maxval=300)
+reversal_lookback = input.int(20, "반전 감지 기간", minval=5, maxval=50)
+min_success_rate = input.float(0.6, "최소 성공률", minval=0.3, maxval=0.9, step=0.05)
+
+// 거래 설정
+max_trades_per_day = input.int(5, "일일 최대 거래 수", minval=1, maxval=20)
+stop_loss_pct = input.float(2.0, "손절매 비율 (%)", minval=0.5, maxval=10.0, step=0.1)
+take_profit_pct = input.float(4.0, "익절매 비율 (%)", minval=1.0, maxval=20.0, step=0.1)
+
+// ============================================================================
+// 데이터 구조 정의
+// ============================================================================
+type PatternData
+    string name
+    array<float> price_points
+    array<float> technical_features
+    float success_rate
+    float avg_profit
+    int occurrence_count
+    int last_used_bar
+
+// ============================================================================
+// 전역 변수
+// ============================================================================
+var array<PatternData> successful_patterns = array.new<PatternData>()
+var int daily_trade_count = 0
+var int last_trade_day = 0
+var bool pattern_db_initialized = false
+
+// ============================================================================
+// 실제 기술적 지표 기반 AI 분석 함수들
+// ============================================================================
+
+// 기술적 특징 추출 (실제 AI 분석의 핵심)
+extract_technical_features(start_bar, end_bar) =>
+    var array<float> features = array.new<float>()
+    array.clear(features)
+    
+    if end_bar - start_bar < 10
+        na
+    else
+        // 1. 가격 모멘텀 분석
+        price_change = (close[start_bar] - close[end_bar]) / close[end_bar]
+        array.push(features, price_change)
+        
+        // 2. 변동성 분석
+        high_price = ta.highest(high, end_bar - start_bar + 1)[start_bar]
+        low_price = ta.lowest(low, end_bar - start_bar + 1)[start_bar]
+        volatility = (high_price - low_price) / close[start_bar]
+        array.push(features, volatility)
+        
+        // 3. RSI 분석
+        rsi_value = ta.rsi(close, 14)[start_bar]
+        array.push(features, rsi_value / 100)
+        
+        // 4. MACD 분석
+        macd_line = ta.macd(close, 12, 26, 9)[0][start_bar]
+        array.push(features, macd_line / close[start_bar])
+        
+        // 5. 스토캐스틱 분석
+        stoch_k = ta.stoch(close, high, low, 14)[start_bar]
+        array.push(features, stoch_k / 100)
+        
+        // 6. ADX 분석 (추세 강도)
+        adx_value = ta.adx(14)[start_bar]
+        array.push(features, adx_value / 100)
+        
+        // 7. 볼린저 밴드 위치
+        bb_upper = ta.bb(close, 20, 2)[0][start_bar]
+        bb_lower = ta.bb(close, 20, 2)[2][start_bar]
+        bb_position = (close[start_bar] - bb_lower) / (bb_upper - bb_lower)
+        array.push(features, bb_position)
+        
+        // 8. 캔들 패턴 분석
+        bullish_candles = 0
+        total_body_size = 0.0
+        for i = start_bar to end_bar
+            if i >= 0 and i < bar_index
+                if close[i] > open[i]
+                    bullish_candles += 1
+                body_size = math.abs(close[i] - open[i])
+                total_body_size += body_size
+        
+        bullish_ratio = bullish_candles / math.max(end_bar - start_bar + 1, 1)
+        avg_body_size = total_body_size / math.max(end_bar - start_bar + 1, 1) / close[start_bar]
+        
+        array.push(features, bullish_ratio)
+        array.push(features, avg_body_size)
+        
+        features
+
+// 실제 반전 점 감지 (AI 기반)
+detect_reversal_points() =>
+    var array<int> reversal_bars = array.new<int>()
+    array.clear(reversal_bars)
+    
+    // 피벗 하이/로우 기반 반전 감지
+    for i = reversal_lookback to bar_index - reversal_lookback
+        if i >= 0 and i < bar_index
+            // 고점 반전 감지
+            is_pivot_high = true
+            for j = 1 to reversal_lookback
+                if i - j >= 0 and i + j < bar_index
+                    if high[i] <= high[i - j] or high[i] <= high[i + j]
+                        is_pivot_high := false
+                        break
+            
+            // 저점 반전 감지
+            is_pivot_low = true
+            for j = 1 to reversal_lookback
+                if i - j >= 0 and i + j < bar_index
+                    if low[i] >= low[i - j] or low[i] >= low[i + j]
+                        is_pivot_low := false
+                        break
+            
+            if is_pivot_high or is_pivot_low
+                array.push(reversal_bars, i)
+    
+    reversal_bars
+
+// 실제 성공 패턴 추출 (과거 데이터 기반)
+extract_successful_patterns_from_history() =>
+    var array<PatternData> patterns = array.new<PatternData>()
+    array.clear(patterns)
+    
+    // 최근 1000개 바에서 반전 점 찾기
+    reversal_bars = detect_reversal_points()
+    
+    for i = 0 to array.size(reversal_bars) - 1
+        if array.size(patterns) >= 20  // 최대 20개 패턴만 저장
+            break
+            
+        reversal_bar = array.get(reversal_bars, i)
+        if reversal_bar >= pattern_lookback and reversal_bar < bar_index - 50
+            
+            // 패턴 추출 (반전 점 기준 앞뒤)
+            start_bar = reversal_bar - pattern_lookback / 2
+            end_bar = reversal_bar + pattern_lookback / 2
+            
+            if start_bar >= 0 and end_bar < bar_index
+                // 기술적 특징 추출
+                features = extract_technical_features(start_bar, end_bar)
+                
+                if not na(features)
+                    // 미래 수익률 계산 (50바 후)
+                    future_bar = math.min(reversal_bar + 50, bar_index - 1)
+                    if future_bar > reversal_bar
+                        future_price = close[future_bar]
+                        current_price = close[reversal_bar]
+                        profit_rate = (future_price - current_price) / current_price
+                        
+                        // 수익률이 목표 이상이면 성공 패턴으로 저장
+                        if math.abs(profit_rate) >= min_profit_pips / 10000
+                            pattern = PatternData.new()
+                            pattern.name := "패턴_" + str.tostring(i)
+                            pattern.price_points := array.new<float>()
+                            pattern.technical_features := features
+                            pattern.success_rate := 1.0
+                            pattern.avg_profit := profit_rate
+                            pattern.occurrence_count := 1
+                            pattern.last_used_bar := reversal_bar
+                            
+                            // 가격 포인트 저장
+                            for j = start_bar to end_bar
+                                if j >= 0 and j < bar_index
+                                    array.push(pattern.price_points, close[j])
+                            
+                            array.push(patterns, pattern)
+    
+    patterns
+
+// AI 기반 패턴 유사도 계산
+calculate_ai_similarity(current_features, pattern_features) =>
+    if na(current_features) or na(pattern_features)
+        0.0
+    else
+        if array.size(current_features) != array.size(pattern_features)
+            0.0
+        else
+            // 코사인 유사도 계산
+            dot_product = 0.0
+            norm_current = 0.0
+            norm_pattern = 0.0
+            
+            for i = 0 to array.size(current_features) - 1
+                current_val = array.get(current_features, i)
+                pattern_val = array.get(pattern_features, i)
+                
+                dot_product += current_val * pattern_val
+                norm_current += current_val * current_val
+                norm_pattern += pattern_val * pattern_val
+            
+            if norm_current > 0 and norm_pattern > 0
+                dot_product / (math.sqrt(norm_current) * math.sqrt(norm_pattern))
+            else
+                0.0
+
+// AI 기반 거래 신호 생성
+generate_ai_trading_signal() =>
+    var bool should_buy = false
+    var bool should_sell = false
+    var float ai_confidence = 0.0
+    var string signal_reason = ""
+    
+    // 패턴 데이터베이스 초기화 (한 번만)
+    if not pattern_db_initialized
+        successful_patterns := extract_successful_patterns_from_history()
+        pattern_db_initialized := true
+    
+    // 현재 시점의 기술적 특징 추출
+    current_start = bar_index - pattern_lookback / 2
+    current_end = bar_index + pattern_lookback / 2
+    
+    if current_start >= 0 and current_end < bar_index
+        current_features = extract_technical_features(current_start, current_end)
+        
+        if not na(current_features) and array.size(successful_patterns) > 0
+            best_similarity = 0.0
+            best_pattern = na
+            
+            // 성공 패턴들과 비교
+            for i = 0 to array.size(successful_patterns) - 1
+                pattern = array.get(successful_patterns, i)
+                similarity = calculate_ai_similarity(current_features, pattern.technical_features)
+                
+                if similarity > best_similarity
+                    best_similarity := similarity
+                    best_pattern := pattern
+            
+            // AI 신뢰도 계산
+            ai_confidence := best_similarity * 0.7 + (best_pattern.avg_profit > 0 ? 0.3 : 0.0)
+            
+            // 거래 신호 생성
+            if ai_confidence >= ai_confidence_threshold and best_similarity >= pattern_similarity_threshold
+                if best_pattern.avg_profit > 0
+                    should_buy := true
+                    should_sell := false
+                    signal_reason := "AI 상승 패턴 감지 (신뢰도: " + str.tostring(ai_confidence, "#.##") + ")"
+                else
+                    should_buy := false
+                    should_sell := true
+                    signal_reason := "AI 하락 패턴 감지 (신뢰도: " + str.tostring(ai_confidence, "#.##") + ")"
+            else
+                should_buy := false
+                should_sell := false
+                signal_reason := "AI 신호 부족 (신뢰도: " + str.tostring(ai_confidence, "#.##") + ")"
+        else
+            should_buy := false
+            should_sell := false
+            signal_reason := "기술적 분석 불가"
+    else
+        should_buy := false
+        should_sell := false
+        signal_reason := "데이터 부족"
+    
+    [should_buy, should_sell, ai_confidence, signal_reason]
+
+// ============================================================================
+// 메인 실행 로직
+// ============================================================================
+
+// AI 거래 신호 생성
+[should_buy, should_sell, ai_confidence, signal_reason] = generate_ai_trading_signal()
+
+// 거래 조건 확인
+in_trading_time = true  // 시간 제한 없음
+no_position = strategy.position_size == 0
+daily_limit_ok = daily_trade_count < max_trades_per_day
+
+// 일일 거래 수 리셋
+if dayofweek != dayofweek[1]
+    daily_trade_count := 0
+
+// 거래 실행
+if should_buy and in_trading_time and no_position and daily_limit_ok
+    strategy.entry("AI_LONG", strategy.long)
+    daily_trade_count += 1
+    last_trade_day := dayofweek
+
+if should_sell and in_trading_time and no_position and daily_limit_ok
+    strategy.entry("AI_SHORT", strategy.short)
+    daily_trade_count += 1
+    last_trade_day := dayofweek
+
+// 손절/익절 설정
+if strategy.position_size > 0
+    strategy.exit("LONG_EXIT", "AI_LONG", stop=close * (1 - stop_loss_pct / 100), limit=close * (1 + take_profit_pct / 100))
+
+if strategy.position_size < 0
+    strategy.exit("SHORT_EXIT", "AI_SHORT", stop=close * (1 + stop_loss_pct / 100), limit=close * (1 - take_profit_pct / 100))
+
+// ============================================================================
+// 시각화 및 모니터링
+// ============================================================================
+
+// AI 분석 결과 테이블
+var table ai_table = table.new(position.top_right, 2, 8, bgcolor=color.white, border_width=1)
+
+if barstate.isconfirmed
+    // 테이블 헤더
+    table.cell(ai_table, 0, 0, "실제 AI 분석", text_color=color.black, bgcolor=color.blue, text_size=size.normal)
+    table.cell(ai_table, 1, 0, "값", text_color=color.white, bgcolor=color.blue, text_size=size.normal)
+    
+    // AI 신뢰도
+    table.cell(ai_table, 0, 1, "AI 신뢰도", text_color=color.black)
+    table.cell(ai_table, 1, 1, str.tostring(ai_confidence, "#.##"), text_color=color.black)
+    
+    // 거래 신호
+    table.cell(ai_table, 0, 2, "거래 신호", text_color=color.black)
+    signal_text = should_buy ? "🟢 매수" : should_sell ? "🔴 매도" : "⏸️ 대기"
+    table.cell(ai_table, 1, 2, signal_text, text_color=color.black)
+    
+    // 신호 이유
+    table.cell(ai_table, 0, 3, "신호 이유", text_color=color.black)
+    table.cell(ai_table, 1, 3, signal_reason, text_color=color.black)
+    
+    // 패턴 수
+    table.cell(ai_table, 0, 4, "패턴 수", text_color=color.black)
+    table.cell(ai_table, 1, 4, str.tostring(array.size(successful_patterns)), text_color=color.black)
+    
+    // 일일 거래 수
+    table.cell(ai_table, 0, 5, "일일 거래", text_color=color.black)
+    table.cell(ai_table, 1, 5, str.tostring(daily_trade_count) + "/" + str.tostring(max_trades_per_day), text_color=color.black)
+    
+    // 총 거래 수
+    table.cell(ai_table, 0, 6, "총 거래", text_color=color.black)
+    table.cell(ai_table, 1, 6, str.tostring(strategy.closedtrades), text_color=color.black)
+    
+    // 승률
+    win_rate = strategy.closedtrades > 0 ? strategy.wintrades / strategy.closedtrades * 100 : 0
+    table.cell(ai_table, 0, 7, "승률", text_color=color.black)
+    table.cell(ai_table, 1, 7, str.tostring(win_rate, "#.#") + "%", text_color=color.black)
+
+// 거래 라벨
+if should_buy
+    label.new(bar_index, low, "🤖 AI 매수\n신뢰도: " + str.tostring(ai_confidence, "#.##"), 
+              color=color.green, textcolor=color.white, style=label.style_label_up, size=size.normal)
+
+if should_sell
+    label.new(bar_index, high, "🤖 AI 매도\n신뢰도: " + str.tostring(ai_confidence, "#.##"), 
+              color=color.red, textcolor=color.white, style=label.style_label_down, size=size.normal)
+
+// ============================================================================
+// 성능 모니터링
+// ============================================================================
+
+// 성능 지표 계산
+total_trades = strategy.closedtrades
+winning_trades = strategy.wintrades
+losing_trades = strategy.losstrades
+win_rate = total_trades > 0 ? winning_trades / total_trades * 100 : 0
+profit_factor = strategy.losstrades > 0 ? strategy.grossprofit / strategy.grossloss : 0
+max_drawdown = strategy.max_drawdown
+
+// 성능 요약 (마지막 바에만 표시)
+if barstate.islast
+    var table perf_table = table.new(position.bottom_right, 2, 6, bgcolor=color.white, border_width=1)
+    
+    table.cell(perf_table, 0, 0, "성능 요약", text_color=color.white, bgcolor=color.blue, text_size=size.normal)
+    table.cell(perf_table, 1, 0, "값", text_color=color.white, bgcolor=color.blue, text_size=size.normal)
+    
+    table.cell(perf_table, 0, 1, "총 거래", text_color=color.black)
+    table.cell(perf_table, 1, 1, str.tostring(total_trades), text_color=color.black)
+    
+    table.cell(perf_table, 0, 2, "승률", text_color=color.black)
+    table.cell(perf_table, 1, 2, str.tostring(win_rate, "#.#") + "%", text_color=color.black)
+    
+    table.cell(perf_table, 0, 3, "수익 팩터", text_color=color.black)
+    table.cell(perf_table, 1, 3, str.tostring(profit_factor, "#.##"), text_color=color.black)
+    
+    table.cell(perf_table, 0, 4, "최대 손실", text_color=color.black)
+    table.cell(perf_table, 1, 4, str.tostring(max_drawdown, "#.##") + "%", text_color=color.black)
+    
+    table.cell(perf_table, 0, 5, "순수익", text_color=color.black)
+    table.cell(perf_table, 1, 5, str.tostring(strategy.netprofit, "#.##"), text_color=color.black)

@@ -1,0 +1,5 @@
+# 최소한의 의존성만 설치
+fastapi
+uvicorn[standard]
+websockets
+python-multipart

@@ -1,0 +1,251 @@
+//@version=6
+strategy("실용적 패턴 거래 전략", overlay=true, initial_capital=1000, default_qty_type=strategy.percent_of_equity, default_qty_value=5)
+
+// ============================================================================
+// 기본 설정
+// ============================================================================
+
+// 백테스트 기간
+start_date = input.time(timestamp("2020-01-01 00:00"), "백테스트 시작일")
+end_date = input.time(timestamp("2025-09-13 00:00"), "백테스트 종료일")
+
+// 거래 설정
+profit_target_pct = input.float(0.01, "수익 목표 (%)", minval=0.001, maxval=0.1)
+stop_loss_pct = input.float(0.02, "손절매 (%)", minval=0.005, maxval=0.1)
+
+// 디버깅
+show_labels = input.bool(true, "라벨 표시")
+show_table = input.bool(true, "디버깅 테이블")
+
+// ============================================================================
+// 간단하고 확실한 패턴 감지
+// ============================================================================
+
+// 1. 강한 상승 캔들
+strong_bullish() =>
+    body_size = close - open
+    total_range = high - low
+    body_size > total_range * 0.6 and close > open
+
+// 2. 강한 하락 캔들
+strong_bearish() =>
+    body_size = open - close
+    total_range = high - low
+    body_size > total_range * 0.6 and close < open
+
+// 3. 상승 엔걸핑 (간단한 조건)
+bullish_engulfing() =>
+    close[1] < open[1] and close > open and close > open[1] and open < close[1]
+
+// 4. 하락 엔걸핑 (간단한 조건)
+bearish_engulfing() =>
+    close[1] > open[1] and close < open and close < open[1] and open > close[1]
+
+// 5. 해머 패턴
+hammer() =>
+    body_size = math.abs(close - open)
+    lower_shadow = math.min(open, close) - low
+    upper_shadow = high - math.max(open, close)
+    total_range = high - low
+    
+    lower_shadow > 2 * body_size and upper_shadow < body_size and total_range > 0
+
+// 6. 상승 추세 (3연속 상승)
+uptrend() =>
+    close > close[1] and close[1] > close[2] and close[2] > close[3]
+
+// 7. 하락 추세 (3연속 하락)
+downtrend() =>
+    close < close[1] and close[1] < close[2] and close[2] < close[3]
+
+// 8. 지지선 터치 (최근 20바 중 최저가)
+support_touch() =>
+    current_low = low
+    lowest_20 = ta.lowest(low[1], 20)  // 이전 20바 중 최저가
+    lowest_20 > 0 and math.abs(current_low - lowest_20) / lowest_20 < 0.005
+
+// 9. 저항선 터치 (최근 20바 중 최고가)
+resistance_touch() =>
+    current_high = high
+    highest_20 = ta.highest(high[1], 20)  // 이전 20바 중 최고가
+    highest_20 > 0 and math.abs(current_high - highest_20) / highest_20 < 0.005
+
+// ============================================================================
+// 거래 조건
+// ============================================================================
+
+// 거래 가능한 시간
+in_trading_time = time >= start_date and time <= end_date
+
+// 포지션 없음
+no_position = strategy.position_size == 0
+
+// 거래 조건
+can_trade = in_trading_time and no_position
+
+// ============================================================================
+// 수익 목표 및 손절매
+// ============================================================================
+
+calculate_targets() =>
+    profit_target = close * profit_target_pct
+    stop_loss = close * stop_loss_pct
+    [profit_target, stop_loss]
+
+// ============================================================================
+// 거래 실행
+// ============================================================================
+
+// 라벨 관리
+var label current_label = na
+
+// 1. 강한 상승 캔들 거래
+if strong_bullish() and can_trade
+    [profit_target, stop_loss] = calculate_targets()
+    strategy.entry("LONG_STRONG", strategy.long)
+    strategy.exit("LONG_STRONG_EXIT", "LONG_STRONG", limit=close + profit_target, stop=close - stop_loss)
+    
+    if show_labels
+        label.delete(current_label)
+        current_label := label.new(bar_index, low, "🔥 강한상승", color=color.green, textcolor=color.white, style=label.style_label_up)
+
+// 2. 강한 하락 캔들 거래
+if strong_bearish() and can_trade
+    [profit_target, stop_loss] = calculate_targets()
+    strategy.entry("SHORT_STRONG", strategy.short)
+    strategy.exit("SHORT_STRONG_EXIT", "SHORT_STRONG", limit=close - profit_target, stop=close + stop_loss)
+    
+    if show_labels
+        label.delete(current_label)
+        current_label := label.new(bar_index, high, "🔥 강한하락", color=color.red, textcolor=color.white, style=label.style_label_down)
+
+// 3. 상승 엔걸핑 거래
+if bullish_engulfing() and can_trade
+    [profit_target, stop_loss] = calculate_targets()
+    strategy.entry("LONG_ENGULF", strategy.long)
+    strategy.exit("LONG_ENGULF_EXIT", "LONG_ENGULF", limit=close + profit_target, stop=close - stop_loss)
+    
+    if show_labels
+        label.delete(current_label)
+        current_label := label.new(bar_index, low, "🟢 엔걸핑", color=color.lime, textcolor=color.black, style=label.style_label_up)
+
+// 4. 하락 엔걸핑 거래
+if bearish_engulfing() and can_trade
+    [profit_target, stop_loss] = calculate_targets()
+    strategy.entry("SHORT_ENGULF", strategy.short)
+    strategy.exit("SHORT_ENGULF_EXIT", "SHORT_ENGULF", limit=close - profit_target, stop=close + stop_loss)
+    
+    if show_labels
+        label.delete(current_label)
+        current_label := label.new(bar_index, high, "🔴 엔걸핑", color=color.orange, textcolor=color.white, style=label.style_label_down)
+
+// 5. 해머 패턴 거래
+if hammer() and can_trade
+    [profit_target, stop_loss] = calculate_targets()
+    strategy.entry("LONG_HAMMER", strategy.long)
+    strategy.exit("LONG_HAMMER_EXIT", "LONG_HAMMER", limit=close + profit_target, stop=close - stop_loss)
+    
+    if show_labels
+        label.delete(current_label)
+        current_label := label.new(bar_index, low, "🔨 해머", color=color.blue, textcolor=color.white, style=label.style_label_up)
+
+// 6. 상승 추세 거래
+if uptrend() and can_trade
+    [profit_target, stop_loss] = calculate_targets()
+    strategy.entry("LONG_TREND", strategy.long)
+    strategy.exit("LONG_TREND_EXIT", "LONG_TREND", limit=close + profit_target, stop=close - stop_loss)
+    
+    if show_labels
+        label.delete(current_label)
+        current_label := label.new(bar_index, low, "📈 상승추세", color=color.purple, textcolor=color.white, style=label.style_label_up)
+
+// 7. 하락 추세 거래
+if downtrend() and can_trade
+    [profit_target, stop_loss] = calculate_targets()
+    strategy.entry("SHORT_TREND", strategy.short)
+    strategy.exit("SHORT_TREND_EXIT", "SHORT_TREND", limit=close - profit_target, stop=close + stop_loss)
+    
+    if show_labels
+        label.delete(current_label)
+        current_label := label.new(bar_index, high, "📉 하락추세", color=color.maroon, textcolor=color.white, style=label.style_label_down)
+
+// 8. 지지선 터치 거래
+if support_touch() and can_trade
+    [profit_target, stop_loss] = calculate_targets()
+    strategy.entry("LONG_SUPPORT", strategy.long)
+    strategy.exit("LONG_SUPPORT_EXIT", "LONG_SUPPORT", limit=close + profit_target, stop=close - stop_loss)
+    
+    if show_labels
+        label.delete(current_label)
+        current_label := label.new(bar_index, low, "🛡️ 지지선", color=color.yellow, textcolor=color.black, style=label.style_label_up)
+
+// 9. 저항선 터치 거래
+if resistance_touch() and can_trade
+    [profit_target, stop_loss] = calculate_targets()
+    strategy.entry("SHORT_RESISTANCE", strategy.short)
+    strategy.exit("SHORT_RESISTANCE_EXIT", "SHORT_RESISTANCE", limit=close - profit_target, stop=close + stop_loss)
+    
+    if show_labels
+        label.delete(current_label)
+        current_label := label.new(bar_index, high, "🚫 저항선", color=color.gray, textcolor=color.white, style=label.style_label_down)
+
+// ============================================================================
+// 디버깅 테이블
+// ============================================================================
+
+// 모든 패턴 함수를 변수로 저장 (일관성 보장)
+var bool strong_bullish_signal = false
+var bool strong_bearish_signal = false
+var bool bullish_engulfing_signal = false
+var bool bearish_engulfing_signal = false
+var bool hammer_signal = false
+var bool uptrend_signal = false
+var bool downtrend_signal = false
+var bool support_touch_signal = false
+var bool resistance_touch_signal = false
+var bool can_trade_signal = false
+
+// 매 바마다 패턴 감지 (일관성 보장)
+strong_bullish_signal := strong_bullish()
+strong_bearish_signal := strong_bearish()
+bullish_engulfing_signal := bullish_engulfing()
+bearish_engulfing_signal := bearish_engulfing()
+hammer_signal := hammer()
+uptrend_signal := uptrend()
+downtrend_signal := downtrend()
+support_touch_signal := support_touch()
+resistance_touch_signal := resistance_touch()
+can_trade_signal := can_trade
+
+if show_table and barstate.isconfirmed
+    var table debug_table = table.new(position.top_right, 2, 10, bgcolor=color.white, border_width=1)
+    
+    table.cell(debug_table, 0, 0, "패턴", text_color=color.black, bgcolor=color.gray)
+    table.cell(debug_table, 1, 0, "상태", text_color=color.black, bgcolor=color.gray)
+    
+    table.cell(debug_table, 0, 1, "강한상승", text_color=color.black)
+    table.cell(debug_table, 1, 1, strong_bullish_signal ? "✅" : "❌", text_color=strong_bullish_signal ? color.green : color.red)
+    
+    table.cell(debug_table, 0, 2, "강한하락", text_color=color.black)
+    table.cell(debug_table, 1, 2, strong_bearish_signal ? "✅" : "❌", text_color=strong_bearish_signal ? color.green : color.red)
+    
+    table.cell(debug_table, 0, 3, "상승엔걸핑", text_color=color.black)
+    table.cell(debug_table, 1, 3, bullish_engulfing_signal ? "✅" : "❌", text_color=bullish_engulfing_signal ? color.green : color.red)
+    
+    table.cell(debug_table, 0, 4, "하락엔걸핑", text_color=color.black)
+    table.cell(debug_table, 1, 4, bearish_engulfing_signal ? "✅" : "❌", text_color=bearish_engulfing_signal ? color.green : color.red)
+    
+    table.cell(debug_table, 0, 5, "해머", text_color=color.black)
+    table.cell(debug_table, 1, 5, hammer_signal ? "✅" : "❌", text_color=hammer_signal ? color.green : color.red)
+    
+    table.cell(debug_table, 0, 6, "상승추세", text_color=color.black)
+    table.cell(debug_table, 1, 6, uptrend_signal ? "✅" : "❌", text_color=uptrend_signal ? color.green : color.red)
+    
+    table.cell(debug_table, 0, 7, "하락추세", text_color=color.black)
+    table.cell(debug_table, 1, 7, downtrend_signal ? "✅" : "❌", text_color=downtrend_signal ? color.green : color.red)
+    
+    table.cell(debug_table, 0, 8, "지지선터치", text_color=color.black)
+    table.cell(debug_table, 1, 8, support_touch_signal ? "✅" : "❌", text_color=support_touch_signal ? color.green : color.red)
+    
+    table.cell(debug_table, 0, 9, "거래가능", text_color=color.black)
+    table.cell(debug_table, 1, 9, can_trade_signal ? "✅" : "❌", text_color=can_trade_signal ? color.green : color.red)
