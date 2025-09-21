@@ -1,0 +1,10 @@
+{
+    "initial_cash": 1000000,
+    "watchlist": ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN"],
+    "trading_interval": 30,
+    "max_position_size": 0.2,
+    "stop_loss_percent": 0.05,
+    "take_profit_percent": 0.1,
+    "sma_short_period": 5,
+    "sma_long_period": 20
+}
