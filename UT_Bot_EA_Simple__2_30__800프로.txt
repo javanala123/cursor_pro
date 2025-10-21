@@ -1,0 +1,160 @@
+//+------------------------------------------------------------------+
+//|                                          UT_Bot_EA_Simple.mq5   |
+//|                        Copyright 2024, MetaQuotes Software Corp.|
+//|                                             https://www.mql5.com|
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2024, MetaQuotes Software Corp."
+#property link      "https://www.mql5.com"
+#property version   "1.00"
+#property description "UT Bot EA - 초간단 버전"
+
+#include <Trade\Trade.mqh>
+
+//--- 입력 파라미터
+input double KeyValue = 2.0;           // 민감도
+input int ATRPeriod = 30;              // ATR 기간
+input double LotSize = 0.01;           // 로트 크기
+input bool ReversePosition = true;     // 반대 신호 시 청산 후 진입
+
+//--- 전역 변수
+int atr_handle;
+int ma_handle;
+double prevStop = 0;
+double prevPrice = 0;
+double prevMa = 0;
+double prevAtrStop = 0;
+int lastSignal = 0;  // 1=매수, -1=매도, 0=없음
+datetime lastBar = 0;
+
+CTrade trade;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    trade.SetExpertMagicNumber(12345);
+    atr_handle = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
+    ma_handle = iMA(_Symbol, PERIOD_CURRENT, 20, 0, MODE_SMA, PRICE_CLOSE);
+    Print("✅ UT Bot 시작 - 이동평균 20 추가");
+    return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    // 새 바 확인
+    datetime bar = iTime(_Symbol, PERIOD_CURRENT, 0);
+    if(bar == lastBar) return;
+    lastBar = bar;
+    
+    // 가격, ATR, 이동평균 가져오기
+    double price = iClose(_Symbol, PERIOD_CURRENT, 0);
+    double atr[1], ma[1];
+    if(CopyBuffer(atr_handle, 0, 0, 1, atr) <= 0) return;
+    if(CopyBuffer(ma_handle, 0, 0, 1, ma) <= 0) return;
+    
+    // ATR 스탑 계산
+    double stop = CalculateStop(price, atr[0]);
+    
+    // 신호 확인 (이동평균 + ATR 스탑 교차)
+    CheckSignal(price, stop, ma[0]);
+    
+    // 이전 값 저장
+    prevAtrStop = prevStop;
+    prevStop = stop;
+    prevPrice = price;
+    prevMa = ma[0];
+}
+
+//+------------------------------------------------------------------+
+//| ATR 스탑 계산                                                    |
+//+------------------------------------------------------------------+
+double CalculateStop(double price, double atr)
+{
+    if(prevStop == 0) return price + (atr * KeyValue);  // 초기화 수정
+    
+    double nLoss = atr * KeyValue;
+    
+    if(price > prevStop && prevPrice > prevStop)
+        return MathMax(prevStop, price - nLoss);
+    else if(price < prevStop && prevPrice < prevStop)
+        return MathMin(prevStop, price + nLoss);
+    else
+        return prevStop;
+}
+
+//+------------------------------------------------------------------+
+//| 신호 확인 및 거래                                                |
+//+------------------------------------------------------------------+
+void CheckSignal(double price, double stop, double ma)
+{
+    if(prevStop == 0 || prevMa == 0) return;
+    
+    // ★★★ TradingView UT Bot 정확한 로직: 이동평균 + ATR 스탑 교차 ★★★
+    bool buySignal = (ma > stop) && (prevMa <= prevAtrStop);
+    bool sellSignal = (ma < stop) && (prevMa >= prevAtrStop);
+    
+    // 연속 신호 방지
+    if((buySignal && lastSignal == 1) || (sellSignal && lastSignal == -1))
+        return;
+    
+    // 매수 신호
+    if(buySignal)
+    {
+        Print("▲ 매수 신호 - MA:", ma, " > ATR Stop:", stop);
+        DrawArrow("BUY", price);
+        
+        // 반대 포지션 청산
+        if(ReversePosition) CloseAll();
+        
+        // 매수
+        trade.Buy(LotSize, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_ASK), 0, 0, "UT Bot");
+        lastSignal = 1;
+    }
+    
+    // 매도 신호
+    if(sellSignal)
+    {
+        Print("▼ 매도 신호 - MA:", ma, " < ATR Stop:", stop);
+        DrawArrow("SELL", price);
+        
+        // 반대 포지션 청산
+        if(ReversePosition) CloseAll();
+        
+        // 매도
+        trade.Sell(LotSize, _Symbol, SymbolInfoDouble(_Symbol, SYMBOL_BID), 0, 0, "UT Bot");
+        lastSignal = -1;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| 모든 포지션 청산                                                 |
+//+------------------------------------------------------------------+
+void CloseAll()
+{
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        if(PositionGetSymbol(i) == _Symbol)
+        {
+            trade.PositionClose(PositionGetInteger(POSITION_TICKET));
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| 화살표 그리기                                                    |
+//+------------------------------------------------------------------+
+void DrawArrow(string signal, double price)
+{
+    string name = "Arrow_" + TimeToString(TimeCurrent());
+    double arrowPrice = signal == "BUY" ? price - 5 : price + 5;  // 5포인트로 조정
+    int code = signal == "BUY" ? 233 : 234;
+    color clr = signal == "BUY" ? clrLime : clrRed;
+    
+    ObjectCreate(0, name, OBJ_ARROW, 0, TimeCurrent(), arrowPrice);
+    ObjectSetInteger(0, name, OBJPROP_ARROWCODE, code);
+    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+}

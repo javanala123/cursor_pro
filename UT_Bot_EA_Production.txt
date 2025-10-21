@@ -1,0 +1,1165 @@
+//+------------------------------------------------------------------+
+//|                                       UT_Bot_EA_Production.mq5 |
+//|                        Copyright 2024, MetaQuotes Software Corp. |
+//|                                             https://www.mql5.com |
+//+------------------------------------------------------------------+
+//| UT Bot EA - ATR 기반 트레일링 스탑 자동매매 전략                     |
+//|                                                                  |
+//| 작동 원리:                                                        |
+//| 1. ATR(Average True Range)을 사용하여 동적 트레일링 스탑 계산      |
+//| 2. 가격이 트레일링 스탑을 돌파할 때 매수/매도 신호 생성             |
+//| 3. 리스크 관리: 스프레드 필터, 시간 필터, 포지션 관리              |
+//| 4. 시각적 표시: 차트에 신호와 트레일링 스탑 라인 표시               |
+//|                                                                  |
+//| Pine Script의 UT Bot Alerts를 MQL5로 완전 변환한 버전            |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2024, MetaQuotes Software Corp."
+#property link      "https://www.mql5.com"
+#property version   "2.00"
+#property description "UT Bot Expert Advisor - Production Version with Advanced Features"
+#property description "Features: Visual Signals, Time Filter, Spread Filter, Multi-Position Support"
+
+//--- 표준 거래 라이브러리 포함 (주문 실행, 포지션 관리 등)
+#include <Trade\Trade.mqh>
+
+//+------------------------------------------------------------------+
+//| 입력 매개변수 (사용자가 설정 가능한 값들)                            |
+//+------------------------------------------------------------------+
+
+//--- UT Bot 핵심 설정
+input group "=== UT Bot Core Settings ==="
+input double KeyValue = 1.0;           // 민감도 조절 값 (0.5-2.0 권장, 낮을수록 더 민감)
+input int ATRPeriod = 10;              // ATR 계산 기간 (5-20 권장, 짧을수록 더 민감)
+input bool UseHeikinAshi = false;      // Heikin Ashi 캔들 사용 (노이즈 감소)
+
+//--- 거래 기본 설정
+input group "=== Trading Settings ==="
+input double LotSize = 0.1;            // 기본 로트 크기 (0.01 = 마이크로 로트)
+input ulong MagicNumber = 123456;      // 매직 넘버 (EA 식별용 고유 번호)
+input int Slippage = 3;                // 슬리피지 허용 범위 (포인트 단위)
+input bool AllowMultiplePositions = false; // 다중 포지션 허용 (false = 한 번에 하나만)
+
+//--- 리스크 관리 설정
+input group "=== Risk Management ==="
+input bool UseStopLoss = true;         // 스탑로스 사용 (트레일링 스탑 가격)
+input bool UseTakeProfit = false;      // 테이크프로핏 사용 (자동 이익 실현)
+input double RiskPercent = 2.0;        // 거래당 리스크 비율 (계좌 잔고의 %, 1-5% 권장)
+input double MaxSpread = 30;           // 최대 허용 스프레드 (포인트, 초과 시 거래 중지)
+input bool EnableSpreadFilter = true;  // 스프레드 필터 활성화 (불리한 조건 방지)
+
+//--- 시간 필터 설정 (특정 시간대에만 거래)
+input group "=== Time Filter Settings ==="
+input bool UseTimeFilter = false;      // 시간 필터 사용 (거래 시간 제한)
+input int StartHour = 0;               // 거래 시작 시간 (0-23시)
+input int EndHour = 23;                // 거래 종료 시간 (0-23시)
+input bool TradeMonday = true;         // 월요일 거래 허용
+input bool TradeTuesday = true;        // 화요일 거래 허용
+input bool TradeWednesday = true;      // 수요일 거래 허용
+input bool TradeThursday = true;       // 목요일 거래 허용
+input bool TradeFriday = true;         // 금요일 거래 허용
+
+//--- 시각적 표시 설정 (차트 디스플레이)
+input group "=== Visual Display Settings ==="
+input bool ShowTrailingStop = true;    // 트레일링 스탑 라인 표시
+input color TrailingStopColor = clrBlue; // 트레일링 스탑 라인 색상
+input int TrailingStopWidth = 2;       // 트레일링 스탑 라인 두께
+input bool ShowSignals = true;         // 매매 신호 화살표 표시
+input color BuySignalColor = clrLime;  // 매수 신호 색상 (초록색)
+input color SellSignalColor = clrRed;  // 매도 신호 색상 (빨간색)
+input int SignalArrowCode = 233;       // 신호 화살표 코드 (233=위쪽, 234=아래쪽)
+input bool ShowInfoPanel = true;       // 정보 패널 표시 (실시간 상태)
+input int InfoPanelX = 20;             // 정보 패널 X 위치 (픽셀)
+input int InfoPanelY = 30;             // 정보 패널 Y 위치 (픽셀)
+input color InfoPanelColor = clrWhite; // 정보 패널 텍스트 색상
+input int InfoPanelFontSize = 10;      // 정보 패널 폰트 크기
+
+//+------------------------------------------------------------------+
+//| 전역 변수 (EA 전체에서 사용되는 변수들)                              |
+//+------------------------------------------------------------------+
+CTrade trade;                          // 거래 실행 객체 (주문, 포지션 관리)
+int g_atr_handle = INVALID_HANDLE;     // ATR 인디케이터 핸들 (MQL5 핸들 시스템)
+double g_xATRTrailingStop = 0.0;       // 현재 ATR 트레일링 스탑 값
+int g_pos = 0;                         // 현재 포지션 상태 (1=롱, -1=숏, 0=중립)
+double g_prevATRTrailingStop = 0.0;    // 이전 바의 트레일링 스탑 값
+double g_prevClose = 0.0;              // 이전 바의 종가
+double g_prevSrc = 0.0;                // 이전 바의 소스 가격 (Heikin Ashi 또는 종가)
+bool g_initialized = false;            // EA 초기화 완료 플래그
+datetime g_lastBarTime = 0;            // 마지막으로 처리한 바의 시간 (새 바 감지용)
+datetime g_lastSignalTime = 0;         // 마지막 신호 발생 시간
+string g_objectPrefix = "UTBot_";      // 차트 객체 이름 접두사 (중복 방지)
+
+//+------------------------------------------------------------------+
+//| 함수 선언 (사용할 함수들을 미리 선언)                                |
+//+------------------------------------------------------------------+
+double CalculateHeikinAshiClose();
+void CalculateATRTrailingStop(double src, double atr);
+void CheckTradingSignals(double src);
+void ExecuteBuyOrder();
+void ExecuteSellOrder();
+bool HasPosition(ENUM_POSITION_TYPE type);
+void ClosePositions(ENUM_POSITION_TYPE type);
+double CalculateLotSize();
+bool CheckSpread();
+bool IsTimeToTrade();
+void UpdateVisualDisplay();
+void CreateTrailingStopLine();
+void UpdateTrailingStopLine();
+void CreateSignalArrow(string signal, double price);
+void CreateBarColorIndicator(string name, datetime time, color clr);
+void CreatePineScriptShape(string signal, double price, bool isBuy, color bgColor, color textColor);
+void CreatePositionIndicator(string name, datetime time, color clr, int position);
+void CreateInfoPanel();
+void UpdateInfoPanel();
+void RemoveAllObjects();
+int CountPositions();
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//| EA가 차트에 적용될 때 한 번만 실행되는 초기화 함수                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    //--- 거래 파라미터 설정
+    // MagicNumber: 이 EA가 생성한 포지션을 식별하는 고유 번호
+    trade.SetExpertMagicNumber(MagicNumber);
+    
+    // Slippage: 주문 가격과 실제 체결 가격의 차이 허용 범위 (포인트 단위)
+    trade.SetDeviationInPoints(Slippage);
+    
+    // ORDER_FILLING_FOK: Fill or Kill - 전량 체결되거나 전량 취소
+    // (부분 체결을 허용하지 않음, 빠른 시장에 유리)
+    trade.SetTypeFilling(ORDER_FILLING_FOK);
+    
+    //--- 전역 변수 초기화 (Pine Script v6와 정확히 일치)
+    // Pine Script: pos = 0 (초기화)
+    g_xATRTrailingStop = 0.0;      // 트레일링 스탑 값
+    g_pos = 0;                      // 포지션 상태 (0=중립, 1=롱, -1=숏) - Pine Script와 동일
+    g_prevATRTrailingStop = 0.0;    // 이전 트레일링 스탑
+    g_prevClose = 0.0;              // 이전 종가
+    g_prevSrc = 0.0;                // 이전 소스 가격
+    g_initialized = false;          // 초기화 플래그 (첫 틱 처리용)
+    g_lastBarTime = 0;              // 새 바 감지용 시간
+    g_lastSignalTime = 0;           // 마지막 신호 시간
+    
+    //--- ATR 인디케이터 핸들 생성 ★ MQL5 핵심!
+    // MQL5에서는 인디케이터 값을 직접 가져올 수 없고 핸들을 통해야 함
+    // 핸들 = 인디케이터에 대한 참조 번호 (파일 핸들과 유사한 개념)
+    g_atr_handle = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
+    if(g_atr_handle == INVALID_HANDLE)
+    {
+        // 핸들 생성 실패 = EA 작동 불가
+        Print("ATR 인디케이터 핸들 생성 실패! 오류 코드: ", GetLastError());
+        return(INIT_FAILED);  // EA 초기화 실패 반환
+    }
+    
+    //--- 시각적 객체 생성 (차트에 표시되는 요소들)
+    if(ShowTrailingStop)
+        CreateTrailingStopLine();  // 트레일링 스탑 수평선 생성
+    
+    if(ShowInfoPanel)
+        CreateInfoPanel();  // 좌측 상단 정보 패널 생성
+    
+    //--- 초기화 완료 메시지 출력
+    Print("========================================");
+    Print("UT Bot EA Production 버전 초기화 완료");
+    Print("민감도: ", KeyValue, " | ATR 기간: ", ATRPeriod);
+    Print("Heikin Ashi: ", UseHeikinAshi ? "사용" : "미사용");
+    Print("시간 필터: ", UseTimeFilter ? "활성화" : "비활성화");
+    Print("스프레드 필터: ", EnableSpreadFilter ? "활성화 (최대: " + DoubleToString(MaxSpread, 1) + ")" : "비활성화");
+    Print("다중 포지션: ", AllowMultiplePositions ? "허용" : "불허");
+    Print("시각적 신호: ", ShowSignals ? "활성화" : "비활성화");
+    Print("========================================");
+    
+    return(INIT_SUCCEEDED);  // 초기화 성공 - EA 작동 시작
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//| EA가 차트에서 제거되거나 종료될 때 실행되는 정리 함수                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+    //--- ATR 인디케이터 핸들 해제 ★ 중요! 메모리 누수 방지
+    // 핸들을 해제하지 않으면 메모리가 계속 점유됨
+    // 여러 EA를 테스트할 때 특히 중요
+    if(g_atr_handle != INVALID_HANDLE)
+        IndicatorRelease(g_atr_handle);
+    
+    //--- 모든 차트 객체 제거
+    // 차트에 생성한 라인, 화살표, 텍스트 등을 모두 삭제
+    // 깔끔하게 정리하여 다음 실행에 영향 없도록 함
+    RemoveAllObjects();
+    
+    //--- 종료 메시지 출력
+    Print("========================================");
+    Print("UT Bot EA Production 버전 종료");
+    Print("종료 사유 코드: ", reason);
+    // reason 값:
+    // 0 = 사용자가 직접 제거
+    // 1 = 프로그램 재컴파일
+    // 3 = 차트 심볼 변경
+    // 4 = 차트 닫힘
+    // 5 = 입력 파라미터 변경
+    Print("========================================");
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//| 매 틱(가격 변동)마다 실행되는 메인 로직 함수 - EA의 핵심!             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    //--- 1단계: 충분한 바(캔들) 개수 확인
+    // ATR 계산에 필요한 최소 개수: ATRPeriod + 1개
+    // 예: ATRPeriod=10이면 최소 11개 바 필요
+    if(Bars(_Symbol, PERIOD_CURRENT) < ATRPeriod + 1)
+        return;  // 개수 부족 시 대기
+    
+    //--- 2단계: 스프레드 필터 체크
+    // 스프레드가 너무 크면 거래 비용이 높아 불리함
+    // MaxSpread를 초과하면 거래하지 않음
+    if(EnableSpreadFilter && !CheckSpread())
+    {
+        if(ShowInfoPanel)
+            UpdateInfoPanel();  // 정보 패널만 업데이트
+        return;  // 거래 중지
+    }
+    
+    //--- 3단계: 시간 필터 체크
+    // 특정 시간대/요일에만 거래 (예: 런던+뉴욕 세션만)
+    // 변동성 낮은 시간 회피
+    if(UseTimeFilter && !IsTimeToTrade())
+    {
+        if(ShowInfoPanel)
+            UpdateInfoPanel();  // 정보 패널만 업데이트
+        return;  // 거래 중지
+    }
+    
+    //--- 4단계: 현재 가격 가져오기
+    double close = iClose(_Symbol, PERIOD_CURRENT, 0);  // 현재 바의 종가
+    if(close <= 0)
+        return;  // 가격 정보 오류
+    
+    //--- 5단계: 소스 가격 계산
+    // UseHeikinAshi = true: Heikin Ashi 종가 (노이즈 감소)
+    // UseHeikinAshi = false: 일반 종가
+    double src = UseHeikinAshi ? CalculateHeikinAshiClose() : close;
+    
+    //--- 6단계: 첫 틱 초기화
+    // EA가 막 시작되었을 때 이전 값들을 저장
+    if(!g_initialized)
+    {
+        g_prevClose = close;
+        g_prevSrc = src;
+        g_initialized = true;
+        g_lastBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+        return;  // 첫 틱은 초기화만 하고 거래 안함
+    }
+    
+    //--- 7단계: ATR 값 가져오기 ★ MQL5 방식!
+    // MQL5에서는 핸들을 통해 버퍼로 값을 복사해야 함
+    double atr_buffer[];
+    ArraySetAsSeries(atr_buffer, true);  // 최신 데이터가 [0]이 되도록
+    if(CopyBuffer(g_atr_handle, 0, 0, 1, atr_buffer) < 0)
+    {
+        // ATR 값 가져오기 실패
+        Print("ATR 버퍼 복사 실패! 오류: ", GetLastError());
+        return;
+    }
+    double atr = atr_buffer[0];  // 현재 ATR 값
+    if(atr <= 0)
+        return;  // ATR 값 오류
+    
+    //--- 8단계: ATR 트레일링 스탑 계산
+    // 핵심 알고리즘: 가격에 따라 동적으로 스탑 위치 조정
+    CalculateATRTrailingStop(src, atr);
+    
+    //--- 9단계: 포지션 상태 업데이트 (매 틱마다)
+    // g_pos 업데이트: 가격과 스탑의 위치 관계 추적
+    UpdatePositionState(src);
+    
+    //--- 10단계: 매매 신호 체크 (새 바에서만!)
+    // 같은 바에서 중복 신호 방지
+    datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+    if(currentBarTime != g_lastBarTime)  // 새 바가 생성되었는가?
+    {
+        CheckTradingSignals(src);  // 크로스오버 감지 및 거래 실행
+        g_lastBarTime = currentBarTime;
+    }
+    
+    //--- 11단계: 차트 시각적 요소 업데이트
+    // 트레일링 스탑 라인, 정보 패널 갱신
+    UpdateVisualDisplay();
+    
+    //--- 12단계: 이전 값 저장 (다음 틱에서 비교용)
+    g_prevClose = close;
+    g_prevSrc = src;
+    g_prevATRTrailingStop = g_xATRTrailingStop;
+}
+
+//+------------------------------------------------------------------+
+//| Check if spread is acceptable                                    |
+//+------------------------------------------------------------------+
+bool CheckSpread()
+{
+    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    
+    if(point <= 0)
+        return false;
+    
+    double spread = (ask - bid) / point;
+    
+    if(spread > MaxSpread)
+    {
+        static datetime lastWarning = 0;
+        if(TimeCurrent() - lastWarning > 3600) // Warn once per hour
+        {
+            Print("Spread too high: ", DoubleToString(spread, 1), " points (Max: ", MaxSpread, ")");
+            lastWarning = TimeCurrent();
+        }
+        return false;
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check if it's time to trade                                      |
+//+------------------------------------------------------------------+
+bool IsTimeToTrade()
+{
+    MqlDateTime dt;
+    TimeToStruct(TimeCurrent(), dt);
+    
+    //--- Check day of week
+    bool dayAllowed = false;
+    switch(dt.day_of_week)
+    {
+        case 1: dayAllowed = TradeMonday; break;
+        case 2: dayAllowed = TradeTuesday; break;
+        case 3: dayAllowed = TradeWednesday; break;
+        case 4: dayAllowed = TradeThursday; break;
+        case 5: dayAllowed = TradeFriday; break;
+        default: dayAllowed = false;
+    }
+    
+    if(!dayAllowed)
+        return false;
+    
+    //--- Check hour
+    if(StartHour <= EndHour)
+        return dt.hour >= StartHour && dt.hour <= EndHour;
+    else
+        return dt.hour >= StartHour || dt.hour <= EndHour;
+}
+
+//+------------------------------------------------------------------+
+//| Update position state (Pine Script pos variable equivalent)     |
+//| Pine Script v6의 pos 로직을 정확히 구현                          |
+//+------------------------------------------------------------------+
+void UpdatePositionState(double src)
+{
+    //--- Pine Script의 nz() 함수 구현
+    // nz(xATRTrailingStop[1], 0) = 이전 값이 na이면 0 반환
+    double prevStop = (g_prevATRTrailingStop == 0.0) ? 0.0 : g_prevATRTrailingStop;
+    int prevPos = g_pos;  // nz(pos[1], 0)와 동일
+    
+    //--- Pine Script v6의 pos 로직을 정확히 구현
+    // Pine Script: pos = 0 (초기화)
+    // Pine Script: iff_3 = src[1] > nz(xATRTrailingStop[1], 0) and src < nz(xATRTrailingStop[1], 0) ? -1 : nz(pos[1], 0)
+    // Pine Script: pos := src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0) ? 1 : iff_3
+    
+    // iff_3 계산: 하향 돌파 조건 체크
+    int iff_3;
+    if((g_prevSrc > prevStop) && (src < prevStop))
+    {
+        iff_3 = -1;  // 하향 돌파 → 숏 포지션
+    }
+    else
+    {
+        iff_3 = prevPos;  // nz(pos[1], 0) - 이전 값 유지
+    }
+    
+    // 최종 pos 계산: 상향 돌파 조건 체크
+    if((g_prevSrc < prevStop) && (src > prevStop))
+    {
+        g_pos = 1;  // 상향 돌파 → 롱 포지션
+    }
+    else
+    {
+        g_pos = iff_3;  // iff_3 결과 사용
+    }
+    
+    // Pine Script v6 로직 완전 구현:
+    // 1. pos = 0으로 초기화 (OnInit에서 처리)
+    // 2. iff_3: 하향 돌파시 -1, 아니면 이전 값 유지
+    // 3. 최종: 상향 돌파시 1, 아니면 iff_3 결과 사용
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Heikin Ashi Close price                               |
+//| Heikin Ashi 캔들의 종가를 계산 (노이즈 감소용)                      |
+//+------------------------------------------------------------------+
+double CalculateHeikinAshiClose()
+{
+    // Heikin Ashi 종가 = (시가 + 고가 + 저가 + 종가) / 4
+    // 일반 캔들보다 부드러운 움직임 → 노이즈 감소
+    // 트렌드 파악에 유리하지만 실제 가격과 차이 있음
+    double haClose = (iClose(_Symbol, PERIOD_CURRENT, 0) +   // 종가
+                     iHigh(_Symbol, PERIOD_CURRENT, 0) +      // 고가
+                     iLow(_Symbol, PERIOD_CURRENT, 0) +       // 저가
+                     iOpen(_Symbol, PERIOD_CURRENT, 0)) / 4.0; // 시가
+    return haClose;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate ATR Trailing Stop                                     |
+//| ATR 기반 동적 트레일링 스탑 계산 - UT Bot 전략의 핵심!               |
+//| Pine Script v6의 iff 로직을 정확히 구현                          |
+//+------------------------------------------------------------------+
+void CalculateATRTrailingStop(double src, double atr)
+{
+    // nLoss: 스탑까지의 거리 = ATR × 민감도
+    // KeyValue가 클수록 스탑이 멀어짐 (보수적)
+    // KeyValue가 작을수록 스탑이 가까워짐 (공격적)
+    double nLoss = KeyValue * atr;
+    
+    //--- Pine Script의 nz() 함수 구현
+    // nz(xATRTrailingStop[1], 0) = 이전 값이 na이면 0 반환
+    double prevStop = (g_prevATRTrailingStop == 0.0) ? 0.0 : g_prevATRTrailingStop;
+    double prevSrc = g_prevSrc;
+    
+    //--- Pine Script v6의 iff 로직을 정확히 구현
+    // iff_1 = src > nz(xATRTrailingStop[1], 0) ? src - nLoss : src + nLoss
+    double iff_1 = (src > prevStop) ? (src - nLoss) : (src + nLoss);
+    
+    // iff_2 = src < nz(xATRTrailingStop[1], 0) and src[1] < nz(xATRTrailingStop[1], 0) ? 
+    //         math.min(nz(xATRTrailingStop[1]), src + nLoss) : iff_1
+    double iff_2;
+    if((src < prevStop) && (prevSrc < prevStop))
+    {
+        iff_2 = MathMin(prevStop, src + nLoss);
+    }
+    else
+    {
+        iff_2 = iff_1;
+    }
+    
+    // xATRTrailingStop := src > nz(xATRTrailingStop[1], 0) and src[1] > nz(xATRTrailingStop[1], 0) ? 
+    //                     math.max(nz(xATRTrailingStop[1]), src - nLoss) : iff_2
+    if((src > prevStop) && (prevSrc > prevStop))
+    {
+        g_xATRTrailingStop = MathMax(prevStop, src - nLoss);
+    }
+    else
+    {
+        g_xATRTrailingStop = iff_2;
+    }
+    
+    // Pine Script v6 로직 완전 구현:
+    // 1. iff_1: 가격이 이전 스탑 위면 (src - nLoss), 아래면 (src + nLoss)
+    // 2. iff_2: 가격이 이전 스탑 아래이고 이전 가격도 스탑 아래면 MIN(이전스탑, src + nLoss), 아니면 iff_1
+    // 3. 최종: 가격이 이전 스탑 위이고 이전 가격도 스탑 위면 MAX(이전스탑, src - nLoss), 아니면 iff_2
+}
+
+//+------------------------------------------------------------------+
+//| Check for trading signals                                        |
+//| 크로스오버를 감지하여 매수/매도 신호 생성 - 실제 거래 타이밍 결정      |
+//| Pine Script v6의 ta.crossover() 로직을 정확히 구현                |
+//+------------------------------------------------------------------+
+void CheckTradingSignals(double src)
+{
+    //--- 이전 값이 없으면 신호 판단 불가
+    if(g_prevATRTrailingStop == 0.0 || g_prevSrc == 0.0)
+        return;
+    
+    //--- EMA(1) 계산 (Pine Script 호환)
+    // Pine Script: ema = ta.ema(src, 1)
+    // EMA(1)은 기본적으로 src 자체와 동일하지만, Pine Script에서는 별도 계산
+    double ema = src;
+    double prevEma = g_prevSrc;  // ema[1] = src[1]
+    
+    //--- Pine Script의 nz() 함수 구현
+    // nz(xATRTrailingStop[1], 0) = 이전 값이 na이면 0 반환
+    double prevStop = (g_prevATRTrailingStop == 0.0) ? 0.0 : g_prevATRTrailingStop;
+    
+    //--- Pine Script v6의 ta.crossover() 로직을 정확히 구현
+    // Pine Script: above = ta.crossover(ema, xATRTrailingStop)
+    // ta.crossover(a, b) = a[1] <= b[1] and a > b
+    bool above = (prevEma <= prevStop) && (ema > g_xATRTrailingStop);
+    
+    // Pine Script: below = ta.crossover(xATRTrailingStop, ema)
+    // ta.crossover(a, b) = a[1] <= b[1] and a > b
+    bool below = (prevStop <= prevEma) && (g_xATRTrailingStop > ema);
+    
+    //--- Pine Script v6의 최종 매매 신호 판단
+    // Pine Script: buy = src > xATRTrailingStop and above
+    // Pine Script: sell = src < xATRTrailingStop and below
+    bool buy = (src > g_xATRTrailingStop) && above;
+    bool sell = (src < g_xATRTrailingStop) && below;
+    
+    //--- 디버깅 정보 출력 (신호 생성 과정 확인)
+    static datetime lastDebugTime = 0;
+    if(TimeCurrent() - lastDebugTime > 1)  // 1초마다 출력
+    {
+        Print("=== 신호 생성 디버깅 정보 ===");
+        Print("현재 가격(src): ", DoubleToString(src, _Digits));
+        Print("트레일링 스탑: ", DoubleToString(g_xATRTrailingStop, _Digits));
+        Print("EMA: ", DoubleToString(ema, _Digits));
+        Print("이전 EMA: ", DoubleToString(prevEma, _Digits));
+        Print("이전 스탑: ", DoubleToString(prevStop, _Digits));
+        Print("상향 크로스오버(above): ", above ? "TRUE" : "FALSE");
+        Print("하향 크로스오버(below): ", below ? "TRUE" : "FALSE");
+        Print("매수 신호(buy): ", buy ? "TRUE" : "FALSE");
+        Print("매도 신호(sell): ", sell ? "TRUE" : "FALSE");
+        Print("포지션 상태(pos): ", g_pos);
+        Print("=============================");
+        lastDebugTime = TimeCurrent();
+    }
+    
+    // 시각화:
+    // 매수 신호:
+    //   스탑 -------
+    //            ╱ ← 가격이 위로 돌파! (BUY)
+    //   가격 ●  ●
+    //
+    // 매도 신호:
+    //   가격 ●  ●
+    //            ╲ ← 가격이 아래로 돌파! (SELL)
+    //   스탑 -------
+    
+    //--- Pine Script v6의 barbuy/barsell 로직 구현
+    // Pine Script: barbuy = src > xATRTrailingStop
+    // Pine Script: barsell = src < xATRTrailingStop
+    bool barbuy = (src > g_xATRTrailingStop);
+    bool barsell = (src < g_xATRTrailingStop);
+    
+    //--- Pine Script v6의 barcolor 기능 구현 (매 틱마다 업데이트)
+    // Pine Script: barcolor(barbuy ? color.green : na)
+    // Pine Script: barcolor(barsell ? color.red : na)
+    if(ShowSignals)
+    {
+        // 현재 바의 색상을 변경 (Pine Script barcolor와 동일)
+        if(barbuy)
+        {
+            // 상승 바: 초록색 (Pine Script color.green)
+            CreateBarColorIndicator("BARCOLOR_GREEN", TimeCurrent(), clrLime);
+        }
+        else if(barsell)
+        {
+            // 하락 바: 빨간색 (Pine Script color.red)
+            CreateBarColorIndicator("BARCOLOR_RED", TimeCurrent(), clrRed);
+        }
+    }
+    
+    //--- Pine Script v6의 xcolor 로직 구현 (포지션 상태에 따른 색상)
+    // Pine Script: xcolor = pos == -1 ? color.red : pos == 1 ? color.green : color.blue
+    color xcolor = (g_pos == -1) ? clrRed : (g_pos == 1) ? clrLime : clrBlue;
+    
+    // 포지션 상태에 따른 추가 시각적 표시
+    if(ShowSignals)
+    {
+        CreatePositionIndicator("POSITION_INDICATOR", TimeCurrent(), xcolor, g_pos);
+    }
+    
+    //--- Pine Script v6의 plot() 함수와 동일한 트레일링 스탑 라인 표시
+    // Pine Script에서는 자동으로 plot()이 되지만 MQL5에서는 수동으로 구현
+    if(ShowTrailingStop)
+    {
+        // 트레일링 스탑 라인을 Pine Script와 동일하게 표시
+        UpdateTrailingStopLine();
+        
+        // Pine Script의 plot()과 동일한 색상으로 표시
+        string objName = g_objectPrefix + "TrailingStop";
+        if(ObjectFind(0, objName) >= 0)
+        {
+            ObjectSetInteger(0, objName, OBJPROP_COLOR, xcolor);  // 포지션 상태에 따른 색상
+        }
+    }
+    
+    //--- 신호 발생 시 주문 실행
+    if(buy)
+    {
+        double current_atr[];
+        ArraySetAsSeries(current_atr, true);
+        CopyBuffer(g_atr_handle, 0, 0, 1, current_atr);
+        
+        Print("========================================");
+        Print("UT Bot: BUY SIGNAL DETECTED");
+        Print("Price: ", DoubleToString(src, _Digits));
+        Print("Trailing Stop: ", DoubleToString(g_xATRTrailingStop, _Digits));
+        Print("ATR: ", DoubleToString(current_atr[0], _Digits));
+        Print("Position State: ", g_pos);
+        Print("========================================");
+        
+        if(ShowSignals)
+        {
+            // Pine Script: plotshape(buy, title = 'Buy', text = 'Buy', style = shape.labelup, location = location.belowbar, color = color.new(color.green, 0), textcolor = color.new(color.white, 0), size = size.tiny)
+            CreatePineScriptShape("BUY", src, true, clrLime, clrWhite);
+        }
+        
+        ExecuteBuyOrder();
+        g_lastSignalTime = TimeCurrent();
+    }
+    else if(sell)
+    {
+        double current_atr[];
+        ArraySetAsSeries(current_atr, true);
+        CopyBuffer(g_atr_handle, 0, 0, 1, current_atr);
+        
+        Print("========================================");
+        Print("UT Bot: SELL SIGNAL DETECTED");
+        Print("Price: ", DoubleToString(src, _Digits));
+        Print("Trailing Stop: ", DoubleToString(g_xATRTrailingStop, _Digits));
+        Print("ATR: ", DoubleToString(current_atr[0], _Digits));
+        Print("Position State: ", g_pos);
+        Print("========================================");
+        
+        if(ShowSignals)
+        {
+            // Pine Script: plotshape(sell, title = 'Sell', text = 'Sell', style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0), textcolor = color.new(color.white, 0), size = size.tiny)
+            CreatePineScriptShape("SELL", src, false, clrRed, clrWhite);
+        }
+        
+        ExecuteSellOrder();
+        g_lastSignalTime = TimeCurrent();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Execute Buy Order                                                |
+//| 실제 매수 주문을 실행하는 함수                                      |
+//+------------------------------------------------------------------+
+void ExecuteBuyOrder()
+{
+    //--- 다중 포지션 허용 여부 체크
+    if(!AllowMultiplePositions)  // 한 번에 하나의 포지션만 허용
+    {
+        // 1. 기존 매도 포지션이 있으면 먼저 청산
+        ClosePositions(POSITION_TYPE_SELL);
+        
+        // 2. 이미 매수 포지션이 있으면 중복 진입 방지
+        if(HasPosition(POSITION_TYPE_BUY))
+        {
+            Print("매수 신호 무시: 이미 매수 포지션 보유 중");
+            return;  // 주문 실행 안함
+        }
+    }
+    
+    //--- 로트 크기 계산
+    // RiskPercent 설정에 따라 리스크 기반 계산 또는 고정 로트 사용
+    double lotSize = CalculateLotSize();
+    
+    //--- 매수 주문 실행
+    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);  // 현재 매수 가격
+    
+    // 스탑로스: 트레일링 스탑 위치 (손실 제한)
+    double sl = UseStopLoss ? g_xATRTrailingStop : 0;
+    
+    // 테이크프로핏: 스탑로스 거리의 2배 (리스크:리워드 = 1:2)
+    double tp = UseTakeProfit ? ask + (ask - g_xATRTrailingStop) * 2 : 0;
+    
+    // CTrade 클래스를 사용한 주문 실행
+    // Buy(로트, 심볼, 가격, SL, TP, 코멘트)
+    if(trade.Buy(lotSize, _Symbol, ask, sl, tp, "UT Bot Buy"))
+    {
+        // 주문 성공
+        Print(">>> 매수 주문 체결 완료 <<<");
+        Print("티켓 번호: ", trade.ResultOrder());
+        Print("로트: ", lotSize);
+        Print("체결 가격: ", DoubleToString(ask, _Digits));
+        Print("손절가: ", DoubleToString(sl, _Digits));
+        Print("익절가: ", DoubleToString(tp, _Digits));
+    }
+    else
+    {
+        // 주문 실패
+        Print("!!! 매수 주문 실패 !!!");
+        Print("오류 코드: ", trade.ResultRetcode());
+        Print("오류 설명: ", trade.ResultRetcodeDescription());
+        // 일반적인 오류:
+        // 10004 = 잘못된 가격
+        // 10006 = 요청 거부
+        // 10013 = 잘못된 요청
+        // 10014 = 주문 실행 불가
+        // 10015 = 수정 불가
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Execute Sell Order                                               |
+//+------------------------------------------------------------------+
+void ExecuteSellOrder()
+{
+    //--- Check if we should allow multiple positions
+    if(!AllowMultiplePositions)
+    {
+        ClosePositions(POSITION_TYPE_BUY);
+        
+        if(HasPosition(POSITION_TYPE_SELL))
+        {
+            Print("Sell signal ignored: Position already exists");
+            return;
+        }
+    }
+    
+    //--- Calculate lot size
+    double lotSize = CalculateLotSize();
+    
+    //--- Execute sell order
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double sl = UseStopLoss ? g_xATRTrailingStop : 0;
+    double tp = UseTakeProfit ? bid - (g_xATRTrailingStop - bid) * 2 : 0;
+    
+    if(trade.Sell(lotSize, _Symbol, bid, sl, tp, "UT Bot Sell"))
+    {
+        Print(">>> SELL ORDER EXECUTED <<<");
+        Print("Ticket: ", trade.ResultOrder());
+        Print("Lot: ", lotSize);
+        Print("Price: ", DoubleToString(bid, _Digits));
+        Print("SL: ", DoubleToString(sl, _Digits));
+        Print("TP: ", DoubleToString(tp, _Digits));
+    }
+    else
+    {
+        Print("!!! SELL ORDER FAILED !!!");
+        Print("Error: ", trade.ResultRetcode());
+        Print("Description: ", trade.ResultRetcodeDescription());
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check if position exists                                         |
+//+------------------------------------------------------------------+
+bool HasPosition(ENUM_POSITION_TYPE type)
+{
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        if(PositionGetTicket(i) > 0)
+        {
+            if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+               PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
+               PositionGetInteger(POSITION_TYPE) == type)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Count positions                                                   |
+//+------------------------------------------------------------------+
+int CountPositions()
+{
+    int count = 0;
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        if(PositionGetTicket(i) > 0)
+        {
+            if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+               PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+            {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Close positions of specified type                               |
+//+------------------------------------------------------------------+
+void ClosePositions(ENUM_POSITION_TYPE type)
+{
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        if(PositionGetTicket(i) > 0)
+        {
+            if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+               PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
+               PositionGetInteger(POSITION_TYPE) == type)
+            {
+                ulong ticket = PositionGetTicket(i);
+                if(trade.PositionClose(ticket))
+                {
+                    Print("Position closed. Ticket: ", ticket);
+                }
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate lot size based on risk management                     |
+//| 리스크 관리에 따른 로트 크기 자동 계산                               |
+//+------------------------------------------------------------------+
+double CalculateLotSize()
+{
+    //--- RiskPercent가 0 이하면 고정 로트 사용
+    if(RiskPercent <= 0)
+        return LotSize;
+    
+    //--- 계좌 정보 가져오기
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);  // 계좌 잔고
+    
+    //--- 리스크 금액 계산
+    // 예: 잔고 $10,000, RiskPercent 2% → $200 리스크
+    double riskAmount = accountBalance * RiskPercent / 100.0;
+    
+    //--- 심볼 정보 가져오기
+    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);  // 1틱의 가치 ($)
+    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);    // 1틱의 크기 (pips)
+    
+    //--- 스탑로스 거리 계산
+    // 현재 가격에서 트레일링 스탑까지의 거리
+    double stopLoss = MathAbs(g_xATRTrailingStop - SymbolInfoDouble(_Symbol, SYMBOL_BID));
+    
+    //--- 로트 크기 계산
+    if(tickValue > 0 && tickSize > 0 && stopLoss > 0)
+    {
+        // 공식: 로트 = 리스크 금액 / (스탑로스 거리 × 틱당 가치)
+        // 예: $200 / (50 pips × $1) = 4 lots
+        double calculatedLot = riskAmount / (stopLoss / tickSize * tickValue);
+        
+        //--- 브로커 제한 범위 내로 조정
+        double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);  // 최소 로트 (예: 0.01)
+        double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);  // 최대 로트 (예: 100)
+        double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP); // 로트 단위 (예: 0.01)
+        
+        // 최소/최대 범위 내로 제한
+        calculatedLot = MathMax(calculatedLot, minLot);
+        calculatedLot = MathMin(calculatedLot, maxLot);
+        
+        // 로트 스텝 단위로 반올림
+        // 예: lotStep=0.01이면 0.01, 0.02, 0.03... 단위로만 가능
+        calculatedLot = NormalizeDouble(calculatedLot / lotStep, 0) * lotStep;
+        
+        return calculatedLot;
+    }
+    
+    //--- 계산 실패 시 고정 로트 반환
+    return LotSize;
+}
+
+//+------------------------------------------------------------------+
+//| Update visual display                                            |
+//+------------------------------------------------------------------+
+void UpdateVisualDisplay()
+{
+    if(ShowTrailingStop)
+        UpdateTrailingStopLine();
+    
+    if(ShowInfoPanel)
+        UpdateInfoPanel();
+}
+
+//+------------------------------------------------------------------+
+//| Create trailing stop line (Pine Script plot equivalent)         |
+//+------------------------------------------------------------------+
+void CreateTrailingStopLine()
+{
+    string objName = g_objectPrefix + "TrailingStop";
+    
+    if(ObjectFind(0, objName) < 0)
+    {
+        // Pine Script의 plot()과 동일한 수평선 생성
+        ObjectCreate(0, objName, OBJ_HLINE, 0, 0, g_xATRTrailingStop);
+        ObjectSetInteger(0, objName, OBJPROP_COLOR, TrailingStopColor);
+        ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);  // Pine Script와 동일한 실선
+        ObjectSetInteger(0, objName, OBJPROP_WIDTH, TrailingStopWidth);
+        ObjectSetInteger(0, objName, OBJPROP_BACK, false);  // Pine Script는 백그라운드에 그리지 않음
+        ObjectSetString(0, objName, OBJPROP_TEXT, "UT Bot Trailing Stop");
+        ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, objName, OBJPROP_HIDDEN, false);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Update trailing stop line                                        |
+//+------------------------------------------------------------------+
+void UpdateTrailingStopLine()
+{
+    string objName = g_objectPrefix + "TrailingStop";
+    
+    if(ObjectFind(0, objName) >= 0)
+    {
+        ObjectSetDouble(0, objName, OBJPROP_PRICE, g_xATRTrailingStop);
+    }
+    else
+    {
+        CreateTrailingStopLine();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Create signal arrow                                              |
+//+------------------------------------------------------------------+
+void CreateSignalArrow(string signal, double price)
+{
+    string objName = g_objectPrefix + "Signal_" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS);
+    
+    ObjectCreate(0, objName, OBJ_ARROW, 0, TimeCurrent(), price);
+    
+    if(signal == "BUY")
+    {
+        ObjectSetInteger(0, objName, OBJPROP_ARROWCODE, SignalArrowCode);
+        ObjectSetInteger(0, objName, OBJPROP_COLOR, BuySignalColor);
+        ObjectSetInteger(0, objName, OBJPROP_ANCHOR, ANCHOR_TOP);
+    }
+    else
+    {
+        ObjectSetInteger(0, objName, OBJPROP_ARROWCODE, SignalArrowCode + 1);
+        ObjectSetInteger(0, objName, OBJPROP_COLOR, SellSignalColor);
+        ObjectSetInteger(0, objName, OBJPROP_ANCHOR, ANCHOR_BOTTOM);
+    }
+    
+    ObjectSetInteger(0, objName, OBJPROP_WIDTH, 3);
+    ObjectSetString(0, objName, OBJPROP_TEXT, signal);
+    ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+}
+
+//+------------------------------------------------------------------+
+//| Create bar color indicator (Pine Script barcolor equivalent)    |
+//+------------------------------------------------------------------+
+void CreateBarColorIndicator(string name, datetime time, color clr)
+{
+    string objName = g_objectPrefix + name + "_" + TimeToString(time, TIME_DATE|TIME_SECONDS);
+    
+    // 기존 같은 시간의 바 색상 객체가 있으면 삭제
+    if(ObjectFind(0, objName) >= 0)
+        ObjectDelete(0, objName);
+    
+    // 현재 바의 고가와 저가 가져오기
+    double high = iHigh(_Symbol, PERIOD_CURRENT, 0);
+    double low = iLow(_Symbol, PERIOD_CURRENT, 0);
+    
+    // 사각형 객체로 바 색상 표시 (Pine Script barcolor와 유사)
+    ObjectCreate(0, objName, OBJ_RECTANGLE, 0, time, low, time + PeriodSeconds(), high);
+    ObjectSetInteger(0, objName, OBJPROP_COLOR, clr);
+    ObjectSetInteger(0, objName, OBJPROP_FILL, true);
+    ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+    ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+    ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
+    
+    // 투명도 설정 (Pine Script와 유사한 효과)
+    ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
+    ObjectSetInteger(0, objName, OBJPROP_WIDTH, 1);
+}
+
+//+------------------------------------------------------------------+
+//| Create Pine Script plotshape equivalent                         |
+//| Pine Script의 plotshape() 함수와 동일한 기능 구현                |
+//+------------------------------------------------------------------+
+void CreatePineScriptShape(string signal, double price, bool isBuy, color bgColor, color textColor)
+{
+    string objName = g_objectPrefix + "Shape_" + signal + "_" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS);
+    
+    // 기존 같은 신호가 있으면 삭제
+    if(ObjectFind(0, objName) >= 0)
+        ObjectDelete(0, objName);
+    
+    // Pine Script: plotshape(buy, title = 'Buy', text = 'Buy', style = shape.labelup, location = location.belowbar, color = color.new(color.green, 0), textcolor = color.new(color.white, 0), size = size.tiny)
+    // Pine Script: plotshape(sell, title = 'Sell', text = 'Sell', style = shape.labeldown, location = location.abovebar, color = color.new(color.red, 0), textcolor = color.new(color.white, 0), size = size.tiny)
+    
+    // 라벨 객체 생성 (Pine Script의 shape.labelup/labeldown과 동일)
+    ObjectCreate(0, objName, OBJ_LABEL, 0, TimeCurrent(), price);
+    
+    // 위치 설정 (Pine Script의 location.belowbar/abovebar와 동일)
+    if(isBuy)
+    {
+        // 매수 신호: 바 아래쪽에 표시 (location.belowbar)
+        ObjectSetInteger(0, objName, OBJPROP_ANCHOR, ANCHOR_UPPER);
+        ObjectSetDouble(0, objName, OBJPROP_PRICE, price - (iHigh(_Symbol, PERIOD_CURRENT, 0) - iLow(_Symbol, PERIOD_CURRENT, 0)) * 0.1);
+    }
+    else
+    {
+        // 매도 신호: 바 위쪽에 표시 (location.abovebar)
+        ObjectSetInteger(0, objName, OBJPROP_ANCHOR, ANCHOR_LOWER);
+        ObjectSetDouble(0, objName, OBJPROP_PRICE, price + (iHigh(_Symbol, PERIOD_CURRENT, 0) - iLow(_Symbol, PERIOD_CURRENT, 0)) * 0.1);
+    }
+    
+    // 색상 설정 (Pine Script의 color.new(color.green/red, 0)와 동일)
+    ObjectSetInteger(0, objName, OBJPROP_COLOR, bgColor);
+    ObjectSetInteger(0, objName, OBJPROP_BGCOLOR, bgColor);
+    ObjectSetInteger(0, objName, OBJPROP_BORDER_COLOR, bgColor);
+    
+    // 텍스트 설정 (Pine Script의 text = 'Buy'/'Sell'과 동일)
+    ObjectSetString(0, objName, OBJPROP_TEXT, signal);
+    ObjectSetInteger(0, objName, OBJPROP_FONTSIZE, 8);  // size.tiny와 유사
+    ObjectSetString(0, objName, OBJPROP_FONT, "Arial Bold");
+    ObjectSetInteger(0, objName, OBJPROP_COLOR, textColor);
+    
+    // 기타 설정
+    ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+    ObjectSetInteger(0, objName, OBJPROP_HIDDEN, false);
+    ObjectSetInteger(0, objName, OBJPROP_BACK, false);
+    
+    // Pine Script의 plotshape과 동일한 시각적 효과
+    ObjectSetInteger(0, objName, OBJPROP_WIDTH, 2);
+    ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
+}
+
+//+------------------------------------------------------------------+
+//| Create position indicator (Pine Script xcolor equivalent)       |
+//| Pine Script의 xcolor 로직에 따른 포지션 상태 표시                  |
+//+------------------------------------------------------------------+
+void CreatePositionIndicator(string name, datetime time, color clr, int position)
+{
+    string objName = g_objectPrefix + name + "_" + TimeToString(time, TIME_DATE|TIME_SECONDS);
+    
+    // 기존 같은 시간의 포지션 표시가 있으면 삭제
+    if(ObjectFind(0, objName) >= 0)
+        ObjectDelete(0, objName);
+    
+    // 포지션 상태에 따른 텍스트
+    string positionText = "";
+    if(position == 1)
+        positionText = "LONG";
+    else if(position == -1)
+        positionText = "SHORT";
+    else
+        positionText = "NEUTRAL";
+    
+    // 현재 가격 위치에 포지션 상태 표시
+    double currentPrice = iClose(_Symbol, PERIOD_CURRENT, 0);
+    
+    // 라벨 객체 생성
+    ObjectCreate(0, objName, OBJ_LABEL, 0, time, currentPrice);
+    ObjectSetInteger(0, objName, OBJPROP_ANCHOR, ANCHOR_LEFT);
+    ObjectSetString(0, objName, OBJPROP_TEXT, positionText);
+    ObjectSetInteger(0, objName, OBJPROP_COLOR, clr);
+    ObjectSetInteger(0, objName, OBJPROP_FONTSIZE, 10);
+    ObjectSetString(0, objName, OBJPROP_FONT, "Arial Bold");
+    ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+    ObjectSetInteger(0, objName, OBJPROP_HIDDEN, false);
+    ObjectSetInteger(0, objName, OBJPROP_BACK, false);
+}
+
+//+------------------------------------------------------------------+
+//| Create information panel                                         |
+//+------------------------------------------------------------------+
+void CreateInfoPanel()
+{
+    string labels[] = {"Status:", "Position:", "Trailing Stop:", "ATR:", "Spread:", "Time Filter:", "Open Positions:"};
+    
+    for(int i = 0; i < ArraySize(labels); i++)
+    {
+        string objName = g_objectPrefix + "Label_" + IntegerToString(i);
+        
+        if(ObjectFind(0, objName) < 0)
+        {
+            ObjectCreate(0, objName, OBJ_LABEL, 0, 0, 0);
+            ObjectSetInteger(0, objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+            ObjectSetInteger(0, objName, OBJPROP_XDISTANCE, InfoPanelX);
+            ObjectSetInteger(0, objName, OBJPROP_YDISTANCE, InfoPanelY + (i * 20));
+            ObjectSetInteger(0, objName, OBJPROP_COLOR, InfoPanelColor);
+            ObjectSetInteger(0, objName, OBJPROP_FONTSIZE, InfoPanelFontSize);
+            ObjectSetString(0, objName, OBJPROP_FONT, "Arial");
+            ObjectSetString(0, objName, OBJPROP_TEXT, labels[i]);
+        }
+        
+        string objNameValue = g_objectPrefix + "Value_" + IntegerToString(i);
+        
+        if(ObjectFind(0, objNameValue) < 0)
+        {
+            ObjectCreate(0, objNameValue, OBJ_LABEL, 0, 0, 0);
+            ObjectSetInteger(0, objNameValue, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+            ObjectSetInteger(0, objNameValue, OBJPROP_XDISTANCE, InfoPanelX + 120);
+            ObjectSetInteger(0, objNameValue, OBJPROP_YDISTANCE, InfoPanelY + (i * 20));
+            ObjectSetInteger(0, objNameValue, OBJPROP_COLOR, InfoPanelColor);
+            ObjectSetInteger(0, objNameValue, OBJPROP_FONTSIZE, InfoPanelFontSize);
+            ObjectSetString(0, objNameValue, OBJPROP_FONT, "Arial Bold");
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Update information panel                                         |
+//+------------------------------------------------------------------+
+void UpdateInfoPanel()
+{
+    //--- Calculate spread
+    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    double spread = point > 0 ? (ask - bid) / point : 0;
+    
+    //--- Get current ATR value
+    double panel_atr[];
+    ArraySetAsSeries(panel_atr, true);
+    CopyBuffer(g_atr_handle, 0, 0, 1, panel_atr);
+    
+    //--- Update values
+    string values[7];
+    values[0] = g_initialized ? "ACTIVE" : "INITIALIZING";
+    values[1] = g_pos == 1 ? "LONG" : g_pos == -1 ? "SHORT" : "NEUTRAL";
+    values[2] = DoubleToString(g_xATRTrailingStop, _Digits);
+    values[3] = DoubleToString(panel_atr[0], _Digits);
+    values[4] = DoubleToString(spread, 1) + " pts";
+    values[5] = UseTimeFilter ? (IsTimeToTrade() ? "ALLOWED" : "BLOCKED") : "DISABLED";
+    values[6] = IntegerToString(CountPositions());
+    
+    //--- Pine Script v6 호환성 정보 추가
+    Print("=== Pine Script v6 호환성 정보 ===");
+    Print("Position State: ", g_pos, " (1=Long, -1=Short, 0=Neutral)");
+    Print("Trailing Stop: ", DoubleToString(g_xATRTrailingStop, _Digits));
+    Print("Current Price: ", DoubleToString(iClose(_Symbol, PERIOD_CURRENT, 0), _Digits));
+    Print("ATR Value: ", DoubleToString(panel_atr[0], _Digits));
+    Print("================================");
+    
+    color colors[7];
+    colors[0] = g_initialized ? clrLime : clrYellow;
+    colors[1] = g_pos == 1 ? clrLime : g_pos == -1 ? clrRed : clrGray;
+    colors[2] = InfoPanelColor;
+    colors[3] = InfoPanelColor;
+    colors[4] = spread <= MaxSpread ? clrLime : clrRed;
+    colors[5] = IsTimeToTrade() ? clrLime : clrRed;
+    colors[6] = CountPositions() > 0 ? clrYellow : clrGray;
+    
+    for(int i = 0; i < 7; i++)
+    {
+        string objNameValue = g_objectPrefix + "Value_" + IntegerToString(i);
+        
+        if(ObjectFind(0, objNameValue) >= 0)
+        {
+            ObjectSetString(0, objNameValue, OBJPROP_TEXT, values[i]);
+            ObjectSetInteger(0, objNameValue, OBJPROP_COLOR, colors[i]);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Remove all objects                                               |
+//+------------------------------------------------------------------+
+void RemoveAllObjects()
+{
+    for(int i = ObjectsTotal(0) - 1; i >= 0; i--)
+    {
+        string objName = ObjectName(0, i);
+        if(StringFind(objName, g_objectPrefix) == 0)
+        {
+            ObjectDelete(0, objName);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Get current trailing stop value                                  |
+//+------------------------------------------------------------------+
+double GetCurrentTrailingStop()
+{
+    return g_xATRTrailingStop;
+}
+
+//+------------------------------------------------------------------+
+//| Get current position state                                       |
+//+------------------------------------------------------------------+
+int GetCurrentPosition()
+{
+    return g_pos;
+}
+//+------------------------------------------------------------------+

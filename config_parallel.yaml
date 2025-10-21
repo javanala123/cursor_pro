@@ -1,0 +1,158 @@
+# 병렬 백테스트 시스템 설정 파일
+# config_parallel.yaml
+
+# 시스템 설정
+system:
+  max_workers: 8  # 최대 워커 수 (CPU 코어 수와 동일하게 설정)
+  data_dir: "historical_data"  # 데이터 디렉토리
+  results_dir: "parallel_results"  # 결과 디렉토리
+  log_level: "INFO"  # 로그 레벨 (DEBUG, INFO, WARNING, ERROR)
+
+# 백테스트 기본 설정
+backtest:
+  initial_balance: 1000.0  # 초기 자본
+  leverage: 200  # 레버리지
+  commission_per_lot: 0.1  # 랏당 수수료 (USD)
+  spread_points: 0.5  # 스프레드 (포인트)
+  lot_size: 0.01  # 기본 로트 크기
+
+# 웹 대시보드 설정
+dashboard:
+  host: "0.0.0.0"  # 호스트 주소
+  port: 5000  # 포트 번호
+  debug: false  # 디버그 모드
+  auto_refresh: 2000  # 자동 새로고침 간격 (밀리초)
+
+# 기본 심볼 목록
+symbols:
+  crypto:
+    - "BTC-USD"
+    - "ETH-USD"
+    - "ADA-USD"
+    - "DOT-USD"
+    - "LINK-USD"
+  
+  forex:
+    - "EURUSD=X"
+    - "GBPUSD=X"
+    - "USDJPY=X"
+    - "AUDUSD=X"
+    - "USDCAD=X"
+  
+  indices:
+    - "^GSPC"  # S&P 500
+    - "^IXIC"  # NASDAQ
+    - "^DJI"   # Dow Jones
+    - "^VIX"   # VIX
+  
+  commodities:
+    - "GC=F"   # Gold
+    - "CL=F"   # Crude Oil
+    - "SI=F"   # Silver
+    - "NG=F"   # Natural Gas
+
+# 기본 전략 목록
+strategies:
+  - "ma_cross"      # 이동평균 교차
+  - "rsi"           # RSI 전략
+  - "bollinger"     # 볼린저 밴드
+  - "macd"          # MACD 전략
+  - "stochastic"    # 스토캐스틱
+  - "combined"      # 복합 전략
+
+# 전략별 파라미터 범위
+strategy_params:
+  ma_cross:
+    fast_period: [5, 10, 15, 20]
+    slow_period: [20, 30, 40, 50]
+  
+  rsi:
+    period: [10, 14, 20, 25]
+    overbought: [70, 75, 80, 85]
+    oversold: [15, 20, 25, 30]
+  
+  bollinger:
+    period: [15, 20, 25, 30]
+    deviation: [1.5, 2.0, 2.5, 3.0]
+  
+  macd:
+    fast_period: [8, 12, 16, 20]
+    slow_period: [21, 26, 31, 35]
+    signal_period: [7, 9, 11, 13]
+  
+  stochastic:
+    k_period: [10, 14, 20, 25]
+    d_period: [3, 5, 7, 9]
+    overbought: [75, 80, 85, 90]
+    oversold: [10, 15, 20, 25]
+  
+  combined:
+    ma_fast: [5, 10, 15]
+    ma_slow: [20, 30, 40]
+    rsi_period: [10, 14, 20]
+    rsi_overbought: [70, 75, 80]
+    rsi_oversold: [20, 25, 30]
+
+# 테스트 모드별 설정
+test_modes:
+  quick:
+    symbols: ["BTC-USD"]
+    strategies: ["ma_cross", "rsi"]
+    days: 30
+    max_combinations: 10
+  
+  comprehensive:
+    symbols: ["BTC-USD", "ETH-USD"]
+    strategies: ["ma_cross", "rsi", "bollinger", "macd"]
+    days: 90
+    max_combinations: 100
+  
+  extensive:
+    symbols: ["BTC-USD", "ETH-USD", "EURUSD=X"]
+    strategies: ["ma_cross", "rsi", "bollinger", "macd", "stochastic", "combined"]
+    days: 180
+    max_combinations: 500
+
+# 성능 최적화 설정
+performance:
+  chunk_size: 1000  # 데이터 청크 크기
+  memory_limit: "4GB"  # 메모리 제한
+  cache_size: 1000  # 캐시 크기
+  parallel_threshold: 10  # 병렬 처리 임계값
+
+# 결과 분석 설정
+analysis:
+  top_performers: 20  # 상위 성과자 수
+  min_trades: 10  # 최소 거래 수
+  min_win_rate: 30.0  # 최소 승률 (%)
+  max_drawdown: 50.0  # 최대 낙폭 (%)
+  
+  export_formats:
+    - "json"
+    - "csv"
+    - "excel"
+    - "html"
+
+# 알림 설정
+notifications:
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    username: ""
+    password: ""
+    recipients: []
+  
+  webhook:
+    enabled: false
+    url: ""
+    timeout: 30
+
+# 로깅 설정
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "parallel_backtest.log"
+  max_size: "10MB"
+  backup_count: 5
+  console: true

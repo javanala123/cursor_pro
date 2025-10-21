@@ -1,0 +1,117 @@
+# CodeRabbit 설정 파일 - UT Bot 트레이딩 시스템
+coderabbit:
+  # 리뷰할 파일 확장자 설정
+  review:
+    include_extensions: 
+      - '.mq5'      # MQL5 Expert Advisor 파일
+      - '.mqh'      # MQL5 헤더 파일
+      - '.py'       # Python 백테스트 시스템
+      - '.pine'     # TradingView Pine Script
+      - '.yaml'     # 설정 파일
+      - '.yml'      # 설정 파일
+      - '.md'       # 문서 파일
+      - '.txt'      # 텍스트 파일
+      - '.html'     # HTML 보고서
+      - '.xlsx'     # Excel 보고서
+    
+    # 제외할 파일/폴더 패턴
+    exclude_patterns:
+      - '*.ex5'           # MQL5 컴파일된 파일
+      - '*.ex4'           # MQL4 컴파일된 파일
+      - '__pycache__/'    # Python 캐시
+      - 'logs/'           # 로그 파일
+      - '*.log'           # 로그 파일
+      - 'historical_data/' # 대용량 데이터 파일
+      - 'professional_data/' # 백테스트 데이터
+      - 'parallel_results/' # 백테스트 결과
+      - 'templates/'      # 템플릿 파일
+      - 'strategies/'     # 전략 파일 (별도 관리)
+    
+    # 리뷰 강도 설정 (light, balanced, thorough)
+    intensity: "thorough"
+    
+    # 자동 리뷰 활성화
+    auto_review: true
+    
+    # 자동 승인 조건
+    auto_approve:
+      # 작은 변경사항 자동 승인
+      small_changes: true
+      # 주석만 변경된 경우 자동 승인
+      comment_only_changes: true
+      # 문서 파일 변경 자동 승인
+      documentation_changes: true
+
+  # 언어별 특화 설정
+  languages:
+    # MQL5 트레이딩 알고리즘 특화
+    mql5:
+      style_guide: "mql5_best_practices"
+      rules:
+        - "trading_algorithm_review"    # 트레이딩 알고리즘 검토
+        - "risk_management_check"    # 리스크 관리 검토
+        - "performance_optimization"   # 성능 최적화
+        - "error_handling_improvement" # 에러 처리 개선
+        - "memory_management"          # 메모리 관리
+        - "variable_naming_conventions" # 변수 명명 규칙
+    
+    # Python 백테스트 시스템
+    python:
+      style_guide: "pep8"
+      rules:
+        - "data_processing_optimization" # 데이터 처리 최적화
+        - "backtest_accuracy_check"     # 백테스트 정확성 검토
+        - "performance_analysis"        # 성능 분석
+        - "error_handling_improvement"  # 에러 처리 개선
+    
+    # TradingView Pine Script
+    pinescript:
+      style_guide: "tradingview_pine"
+      rules:
+        - "trading_strategy_review"      # 트레이딩 전략 검토
+        - "indicator_optimization"      # 지표 최적화
+        - "performance_optimization"     # 성능 최적화
+
+  # 커스텀 규칙 설정
+  custom_rules:
+    # 트레이딩 시스템 특화 규칙
+    - "trading_system_architecture"     # 트레이딩 시스템 아키텍처
+    - "risk_management_validation"       # 리스크 관리 검증
+    - "backtest_accuracy_verification"  # 백테스트 정확성 검증
+    - "performance_benchmarking"        # 성능 벤치마킹
+    - "code_security_review"            # 코드 보안 검토
+
+  # 알림 설정 (선택사항)
+  notifications:
+    # 슬랙 웹훅 (설정 시)
+    # slack_webhook: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+    
+    # 디스코드 웹훅 (설정 시)
+    # discord_webhook: "https://discord.com/api/webhooks/YOUR/WEBHOOK/URL"
+
+  # 리뷰 제외 조건
+  skip_review:
+    # 자동 생성된 파일 제외
+    auto_generated_files: true
+    # 설정 파일 제외
+    config_files: false
+    # 문서 파일 제외
+    documentation_files: false
+
+  # 리뷰 우선순위
+  priority:
+    # 높은 우선순위 파일
+    high_priority:
+      - "UT_Bot_EA_*.mq5"     # 메인 EA 파일들
+      - "*.py"                 # Python 백테스트 파일들
+      - "strategy_*.py"        # 전략 관련 파일들
+    
+    # 중간 우선순위 파일
+    medium_priority:
+      - "*.pine"               # Pine Script 파일들
+      - "*.md"                 # 문서 파일들
+    
+    # 낮은 우선순위 파일
+    low_priority:
+      - "*.txt"                # 텍스트 파일들
+      - "*.html"               # HTML 파일들

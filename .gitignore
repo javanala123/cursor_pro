@@ -1,4 +1,11 @@
-# Python
+# UT Bot 트레이딩 시스템 - Git Ignore 파일
+
+# MQL5 컴파일된 파일들
+*.ex5
+*.ex4
+*.dll
+
+# Python 관련
 __pycache__/
 *.py[cod]
 *$py.class
@@ -21,84 +28,92 @@ wheels/
 *.egg
 MANIFEST
 
-# Virtual Environment
+# 가상환경
 venv/
 env/
 ENV/
 env.bak/
 venv.bak/
 
-# IDE
+# IDE 관련
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Logs
+# 로그 파일들
 *.log
 logs/
-log/
+*.log.*
 
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+# 백테스트 결과 및 데이터
+historical_data/
+professional_data/
+parallel_results/
+backtest_results/
+test_results/
 
-# Node modules (if using frontend)
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# 대용량 데이터 파일
+*.hst
+*.fxt
+*.csv
+*.dat
 
-# Temporary files
+# 임시 파일들
 *.tmp
 *.temp
-temp/
-tmp/
+*.bak
+*.backup
 
-# Database
+# 설정 파일 (민감한 정보 포함)
+config_local.yaml
+config_production.yaml
+secrets.yaml
+.env
+.env.local
+
+# 보고서 파일들 (자동 생성)
+ReportTester-*.html
+ReportTester-*.png
+ReportTester-*.hst
+ReportTester-*.mfemae
+
+# 템플릿 파일들
+templates/
+*.template
+
+# 전략 파일들 (별도 관리)
+strategies/
+*.strategy
+
+# 캐시 파일들
+*.cache
+.cache/
+
+# OS 관련 파일들
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 압축 파일들
+*.zip
+*.rar
+*.7z
+*.tar.gz
+
+# 실행 파일들
+*.exe
+*.msi
+*.deb
+*.rpm
+
+# 데이터베이스 파일들
 *.db
 *.sqlite
 *.sqlite3
 
-# API Keys and sensitive data
-config_secret.yaml
-secrets.yaml
-api_keys.yaml
-
-# Trading data
-data/
-*.csv
-*.json
-trading_data/
-
-# Model files (if large)
-models/
-*.pkl
-*.joblib
-*.h5
-*.model
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Coverage reports
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
+# 백업 파일들
+*.backup
+*.bak
+*~
