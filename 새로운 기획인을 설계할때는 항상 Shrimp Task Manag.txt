@@ -1,0 +1,6 @@
+새로운 기획인을 설계할때는 항상 Shrimp Task Manager mcp 서버를 20단계 이상 단계별 작업을 세분화해서 진행할것
+기획이나 설계단계에서는 Context7 mcp , reference-servers mcp , playwright Automation mcp 서버를 이용해서 자료를 모을것
+코딩이나 디버깅을 등 고도의 지능이 필요한 작업을 할때에는 Sequentia Thinking mcp 서브를 이용해서 결과를 도출할것l
+또한 설계및 코딩 과 디버깅 그리고 어떠한 개선을 위해 작업을 할때에는 Context7 mcp 서버를 이용해서 최신 정보를 제공할것
+새로은 파일이 생성될때마다 notion mcp 를 이용해 관련 문서를 모두 저장할것
+디자인 작업을 할때에는 되도록 figma mcp서버를 이용해서 할것

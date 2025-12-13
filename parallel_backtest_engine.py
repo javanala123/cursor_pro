@@ -26,6 +26,11 @@ from pathlib import Path
 import pickle
 import warnings
 warnings.filterwarnings('ignore')
+try:
+    from prometheus_client import Counter, Histogram, Gauge, start_http_server
+    _PROM_AVAILABLE = True
+except Exception:
+    _PROM_AVAILABLE = False
 
 # 로깅 설정
 logging.basicConfig(
@@ -68,6 +73,9 @@ class BacktestResult:
     max_drawdown_percentage: float
     profit_factor: float
     sharpe_ratio: float
+    sortino_ratio: float
+    calmar_ratio: float
+    recovery_factor: float
     execution_time: float
     trades: List[Dict]
     equity_curve: List[Dict]
@@ -80,7 +88,8 @@ class ParallelBacktestEngine:
     def __init__(self, 
                  max_workers: int = None,
                  data_dir: str = "historical_data",
-                 results_dir: str = "parallel_results"):
+                 results_dir: str = "parallel_results",
+                 prometheus_port: Optional[int] = None):
         """
         초기화
         
@@ -103,6 +112,21 @@ class ParallelBacktestEngine:
         
         # 결과 큐
         self.result_queue = queue.Queue()
+
+        # Prometheus 메트릭 초기화
+        self._metrics = None
+        if _PROM_AVAILABLE:
+            try:
+                port = prometheus_port or int(os.environ.get("PROMETHEUS_PORT", "8001"))
+                start_http_server(port)
+                self._metrics = {
+                    'backtests_total': Counter('backtests_total', 'Total backtests run'),
+                    'execution_time': Histogram('backtest_duration_seconds', 'Backtest execution time seconds'),
+                    'active_workers': Gauge('active_workers', 'Number of active workers')
+                }
+                logger.info(f"📈 Prometheus 메트릭 서버 시작: port={port}")
+            except Exception as _:
+                logger.warning("Prometheus 초기화 실패 - 메트릭 비활성")
         
         logger.info(f"🚀 병렬 백테스트 엔진 초기화")
         logger.info(f"   - 최대 워커 수: {self.max_workers}")
@@ -144,6 +168,16 @@ class ParallelBacktestEngine:
         # 한글 주석: 인덱스가 datetime 형이 아닐 경우 강제 변환
         if not isinstance(data.index, pd.DatetimeIndex):
             data.index = pd.to_datetime(data.index, errors='coerce')
+        # 한글 주석: tz-aware 인덱스를 tz-naive로 정규화 (UTC 기준 제거)
+        try:
+            if getattr(data.index, 'tz', None) is not None:
+                # UTC로 정규화 후 타임존 제거
+                data.index = data.index.tz_convert('UTC').tz_localize(None)
+        except Exception:
+            try:
+                data.index = data.index.tz_localize(None)
+            except Exception:
+                pass
         # 한글 주석: 수치형 컬럼 강제 변환
         for col in ['Open','High','Low','Close','Volume']:
             if col in data.columns:
@@ -151,9 +185,9 @@ class ParallelBacktestEngine:
         # NaN 제거
         data = data.dropna(subset=['Open','High','Low','Close'])
         
-        # 날짜 필터링 (문자열을 datetime으로 변환)
-        start_dt = pd.to_datetime(start_date)
-        end_dt = pd.to_datetime(end_date)
+        # 날짜 필터링 (문자열을 datetime으로 변환) - tz 정보 제거
+        start_dt = pd.to_datetime(start_date).tz_localize(None) if hasattr(pd.to_datetime(start_date), 'tz') else pd.to_datetime(start_date)
+        end_dt = pd.to_datetime(end_date).tz_localize(None) if hasattr(pd.to_datetime(end_date), 'tz') else pd.to_datetime(end_date)
         
         # 데이터가 있는 범위로 조정
         data_start = data.index.min()
@@ -209,10 +243,14 @@ class ParallelBacktestEngine:
             strategy_func = self.strategy_registry[config.strategy_name]
             
             # 백테스트 실행
+            timer_start = time.time()
             result = self._execute_backtest(data, config, strategy_func)
-            
-            # 실행 시간 기록
-            result.execution_time = time.time() - start_time
+            exec_sec = time.time() - timer_start
+            result.execution_time = exec_sec
+            if self._metrics:
+                self._metrics['backtests_total'].inc()
+                self._metrics['execution_time'].observe(exec_sec)
+            # 이미 위에서 기록됨
             
             logger.info(f"✅ 백테스트 완료: {config.symbol} - {config.strategy_name} ({result.execution_time:.2f}초)")
             
@@ -235,6 +273,9 @@ class ParallelBacktestEngine:
                 max_drawdown_percentage=0.0,
                 profit_factor=0.0,
                 sharpe_ratio=0.0,
+                sortino_ratio=0.0,
+                calmar_ratio=0.0,
+                recovery_factor=0.0,
                 execution_time=execution_time,
                 trades=[],
                 equity_curve=[],
@@ -409,6 +450,9 @@ class ParallelBacktestEngine:
                 max_drawdown_percentage=0.0,
                 profit_factor=0.0,
                 sharpe_ratio=0.0,
+                sortino_ratio=0.0,
+                calmar_ratio=0.0,
+                recovery_factor=0.0,
                 execution_time=0.0,
                 trades=trades,
                 equity_curve=equity_curve
@@ -441,12 +485,18 @@ class ParallelBacktestEngine:
         gross_loss = abs(sum(t['profit'] for t in trades if t['profit'] < 0))
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
         
-        # 샤프 비율
+        # 샤프/소르티노/칼마/리커버리 비율
         if len(trades) > 1:
             returns = [t['profit'] for t in trades]
             sharpe_ratio = np.mean(returns) / np.std(returns) if np.std(returns) > 0 else 0
         else:
             sharpe_ratio = 0.0
+        # 일별 수익률 근사 (트레이드 기반 간략화)
+        returns_series = pd.Series([t['profit'] for t in trades])
+        downside = returns_series[returns_series < 0]
+        sortino_ratio = (returns_series.mean() / downside.std()) if downside.std() and downside.std() > 0 else 0.0
+        calmar_ratio = ((net_profit / config.initial_balance) / abs(max_drawdown_percentage)) if max_drawdown_percentage != 0 else 0.0
+        recovery_factor = (net_profit / abs(max_drawdown)) if max_drawdown != 0 else 0.0
         
         return BacktestResult(
             config=config,
@@ -461,6 +511,9 @@ class ParallelBacktestEngine:
             max_drawdown_percentage=max_drawdown_percentage,
             profit_factor=profit_factor,
             sharpe_ratio=sharpe_ratio,
+            sortino_ratio=sortino_ratio,
+            calmar_ratio=calmar_ratio,
+            recovery_factor=recovery_factor,
             execution_time=0.0,
             trades=trades,
             equity_curve=equity_curve

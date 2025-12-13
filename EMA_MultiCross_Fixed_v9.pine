@@ -1,0 +1,1167 @@
+﻿//@version=6
+// EMA MultiCross Fixed v9 - 지능형 분석 엔진
+// 실시간 차트 분석 및 자동 매매 전략
+strategy("EMA MultiCross Fixed v9", shorttitle="EMA MultiX", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.1, process_orders_on_close=true)
+
+// ============================================================================
+// 거래 설정
+// ============================================================================
+groupTrade = "거래 설정"
+baseLot = input.float(0.02, "최초 진입 랏", minval=0.01, step=0.01, group=groupTrade)
+addLot = input.float(0.01, "추가진입/청산 단위 랏", minval=0.01, step=0.01, group=groupTrade)
+
+// ============================================================================
+// 단계별 수익청산 (달러)
+// ============================================================================
+groupProfit = "단계별 수익청산 (달러)"
+profitLevel1 = input.float(100.0, "1차 수익청산 목표 (달러)", minval=0.1, step=10.0, group=groupProfit)
+profitLevel2 = input.float(200.0, "2차 수익청산 목표 (달러)", minval=0.1, step=10.0, group=groupProfit)
+profitLevel3 = input.float(300.0, "3차 수익청산 목표 (달러)", minval=0.1, step=10.0, group=groupProfit)
+profitLevel4 = input.float(400.0, "4차 수익청산 목표 (달러)", minval=0.1, step=10.0, group=groupProfit)
+
+// ============================================================================
+// 손실관리
+// ============================================================================
+groupLoss = "손실관리"
+lossLimitDollar = input.float(10.0, "손실 한도 (달러)", minval=0.1, step=1.0, group=groupLoss)
+maxPositionLots = input.float(0.10, "최대 포지션 크기", minval=0.01, step=0.01, group=groupLoss)
+
+// ============================================================================
+// EMA 설정
+// ============================================================================
+groupEMA = "EMA 설정"
+ma5 = input.int(5, "5 EMA (진입/청산)", minval=1, group=groupEMA)
+ma20 = input.int(20, "20 EMA (진입/2차청산)", minval=1, group=groupEMA)
+ma60 = input.int(60, "60 EMA (2차진입/3차청산)", minval=1, group=groupEMA)
+ma120 = input.int(120, "120 EMA (3차진입/4차청산)", minval=1, group=groupEMA)
+ma200 = input.int(200, "200 EMA (4차진입)", minval=1, group=groupEMA)
+priceSource = input.source(close, "가격 소스", group=groupEMA)
+maMethod = input.string("EMA", "이동평균 방법", options=["EMA", "SMA"], group=groupEMA)
+
+// ============================================================================
+// 리스크 관리 (ATR/트레일링/스프레드)
+// ============================================================================
+groupRisk = "리스크 관리 (ATR/트레일링/스프레드)"
+atrPeriod = input.int(14, "ATR 기간", minval=1, group=groupRisk)
+slATR = input.float(2.5, "SL = ATR 배수 (추세반전 대응)", minval=0.1, step=0.1, group=groupRisk, tooltip="추세 반전 시 진입을 위해 더 넓게 설정")
+tpATR = input.float(4.0, "TP = ATR 배수 (기본값 증가)", minval=0.1, step=0.1, group=groupRisk)
+trailATR = input.float(1.0, "Trailing = ATR 배수", minval=0.1, step=0.1, group=groupRisk)
+useSpreadFilter = input.bool(false, "스프레드 필터 사용", group=groupRisk)
+maxSpreadPoints = input.int(120, "최대 스프레드 (포인트)", minval=1, group=groupRisk)
+
+// ============================================================================
+// 지능형 분석 엔진 설정
+// ============================================================================
+groupAIEngine = "지능형 분석 엔진"
+useAIEngine = input.bool(true, "지능형 분석 엔진 활성화", group=groupAIEngine, tooltip="거래량, 추세 강도, 지지선을 실시간으로 분석하여 매매 결정 (Pine Script 내 지능형 로직)")
+adxPeriod = input.int(14, "ADX 기간", minval=1, group=groupAIEngine)
+adxThresholdTrend = input.float(25.0, "ADX 추세 임계값", minval=0, maxval=100, step=0.5, group=groupAIEngine, tooltip="이 값 이상: 명확한 추세")
+adxThresholdBreakout = input.float(18.0, "ADX 돌파 임계값 (횡보→추세)", minval=0, maxval=100, step=0.5, group=groupAIEngine, tooltip="횡보 후 추세 시작 감지용 (더 낮은 값)")
+minBarsBetweenTrades = input.int(5, "최소 거래 간격 (봉수)", minval=1, group=groupAIEngine, tooltip="거래수 증가를 위해 완화 (기본값: 5)")
+
+// 횡보 감지 설정
+groupSideways = "횡보 감지 설정"
+sidewaysLookback = input.int(20, "횡보 감지 기간", minval=10, maxval=50, group=groupSideways)
+sidewaysATRThreshold = input.float(0.7, "횡보 ATR 임계값 (배수)", minval=0.3, step=0.1, group=groupSideways, tooltip="ATR이 평균의 N배 이하면 횡보로 간주")
+sidewaysPriceRange = input.float(0.02, "횡보 가격 범위 (퍼센트)", minval=0.01, step=0.01, group=groupSideways, tooltip="고점-저점이 평균가의 N% 이하면 횡보")
+
+// 지지/저항선 감지 설정
+groupSupportResistance = "지지/저항선 감지"
+useSupportResistance = input.bool(true, "지지/저항선 감지 사용", group=groupSupportResistance)
+srLookback = input.int(20, "지지/저항 검색 기간", minval=10, maxval=50, group=groupSupportResistance)
+srTouchCount = input.int(2, "최소 터치 횟수", minval=2, maxval=5, group=groupSupportResistance, tooltip="지지/저항선으로 인정하기 위한 최소 터치 횟수")
+
+// 거래량 패턴 분석
+groupVolume = "거래량 패턴 분석"
+useVolumePattern = input.bool(true, "거래량 패턴 분석 사용", group=groupVolume)
+volumeSurgeMultiplier = input.float(1.5, "거래량 급증 배수", minval=1.2, step=0.1, group=groupVolume, tooltip="평균 거래량의 N배 이상이면 급증으로 간주")
+volumeTrendBars = input.int(3, "거래량 추세 확인 기간", minval=2, maxval=5, group=groupVolume, tooltip="연속 N개 캔들의 거래량 증가 확인")
+
+// ============================================================================
+// 지능형 분석: 가중치 기반 신호 점수 시스템
+// ============================================================================
+groupSignalScore = "지능형 신호 점수 시스템"
+useSignalScore = input.bool(true, "신호 점수 시스템 사용", group=groupSignalScore, tooltip="여러 지표를 가중치로 결합하여 신호 강도 측정 (0-100점) - Pine Script 내 지능형 로직")
+weightTrend = input.float(30.0, "추세 가중치 (%)", minval=0, maxval=100, step=5, group=groupSignalScore)
+weightMomentum = input.float(25.0, "모멘텀 가중치 (%)", minval=0, maxval=100, step=5, group=groupSignalScore)
+weightVolume = input.float(20.0, "거래량 가중치 (%)", minval=0, maxval=100, step=5, group=groupSignalScore)
+weightSupportResistance = input.float(15.0, "지지/저항 가중치 (%)", minval=0, maxval=100, step=5, group=groupSignalScore)
+weightPattern = input.float(10.0, "패턴 가중치 (%)", minval=0, maxval=100, step=5, group=groupSignalScore)
+minSignalScore = input.float(60.0, "최소 신호 점수", minval=0, maxval=100, step=5, group=groupSignalScore, tooltip="이 점수 이상일 때만 진입")
+
+// ============================================================================
+// 지능형 분석: 적응형 파라미터 조정
+// ============================================================================
+groupAdaptive = "적응형 파라미터 조정"
+useAdaptiveParams = input.bool(true, "적응형 파라미터 사용", group=groupAdaptive, tooltip="시장 상태에 따라 SL/TP 자동 조정 (Pine Script 내 지능형 로직)")
+adaptiveVolatilityFactor = input.float(1.5, "변동성 적응 배수", minval=1.0, step=0.1, group=groupAdaptive, tooltip="변동성이 높을 때 SL/TP 확대 배수")
+
+// ============================================================================
+// 손절 계산 설정 (거래량 + 긴 꼬리)
+// ============================================================================
+groupStopLoss = "손절 계산 (거래량 + 긴 꼬리)"
+useVolumeWickSL = input.bool(true, "거래량+꼬리 기반 손절 사용", group=groupStopLoss, tooltip="이전 10개 캔들 중 거래량 증가 + 긴 꼬리 저가/고가 사용")
+wickLookback = input.int(10, "꼬리 검색 기간", minval=5, maxval=20, group=groupStopLoss)
+volumeMultiplier = input.float(1.5, "거래량 증가 배수", minval=1.0, step=0.1, group=groupStopLoss, tooltip="평균 거래량의 N배 이상인 캔들만 고려")
+
+// ============================================================================
+// 기타 설정
+// ============================================================================
+groupOther = "기타 설정"
+waitBarsAfterEntry = input.int(10, "피라미딩 대기 봉수", minval=1, group=groupOther)
+maxTradeCount = input.int(0, "최대 거래 횟수 (0=무제한)", minval=0, group=groupOther)
+verboseLog = input.bool(true, "상세 로그", group=groupOther)
+
+    // ============================================================================
+    // 지표 계산
+    // ============================================================================
+
+// 이동평균 계산
+calcMA(period, src) =>
+    maMethod == "EMA" ? ta.ema(src, period) : ta.sma(src, period)
+
+    ema5 = calcMA(ma5, priceSource)
+    ema20 = calcMA(ma20, priceSource)
+    ema60 = calcMA(ma60, priceSource)
+    ema120 = calcMA(ma120, priceSource)
+    ema200 = calcMA(ma200, priceSource)
+
+    // ATR 계산
+    atr = ta.atr(atrPeriod)
+
+// ADX 계산 (추세 강도 확인)
+calcADX(len) =>
+    up = ta.change(high)
+    down = -ta.change(low)
+    plusDM = na(up) ? na : (up > down and up > 0 ? up : 0)
+    minusDM = na(down) ? na : (down > up and down > 0 ? down : 0)
+    trur = ta.rma(ta.tr, len)
+    plus = 100 * ta.rma(plusDM, len) / trur
+    minus = 100 * ta.rma(minusDM, len) / trur
+    sum = plus + minus
+    adx = 100 * ta.rma(math.abs(plus - minus) / (sum == 0 ? 1 : sum), len)
+    adx
+    adxValue = calcADX(adxPeriod)
+
+    // RSI 계산 (모멘텀 분석용)
+    rsiPeriod = 14
+    rsi = ta.rsi(close, rsiPeriod)
+
+    // MACD 계산 (모멘텀 분석용)
+    macdFast = 12
+    macdSlow = 26
+    macdSignal = 9
+    [macdLine, signalLine, histLine] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+    // 거래량 평균 계산
+    avgVolume = ta.sma(volume, wickLookback)
+    avgVolumeLong = ta.sma(volume, sidewaysLookback)
+
+    // ATR 평균 계산 (전역 변수로 추출하여 매 바마다 실행 보장)
+    atrSma20 = ta.sma(atr, 20)
+
+    // 캔들 패턴 인식용 SMA (중복 계산 방지)
+    sma5Close = ta.sma(close, 5)
+
+// 스프레드 필터
+spreadOK() =>
+    if not useSpreadFilter
+        true
+    else
+        spread = (high - low) / syminfo.mintick
+        spread <= maxSpreadPoints
+
+// ============================================================================
+// 지능형 분석: 횡보 구간 감지
+// ============================================================================
+detectSideways() =>
+    // 1. ATR이 평균의 sidewaysATRThreshold 배 이하
+    atrAvg = ta.sma(atr, sidewaysLookback)
+    atrLow = atr <= atrAvg * sidewaysATRThreshold
+
+    // 2. 가격 범위가 제한적 (고점-저점이 평균가의 N% 이하)
+    highestHigh = ta.highest(high, sidewaysLookback)
+    lowestLow = ta.lowest(low, sidewaysLookback)
+    priceRange = highestHigh - lowestLow
+    avgPrice = ta.sma(close, sidewaysLookback)
+    rangeSmall = priceRange <= avgPrice * sidewaysPriceRange / 100
+
+    // 3. EMA들이 모여있음 (5EMA와 200EMA의 거리가 작음)
+    emaSpread = math.abs(ema5 - ema200)
+    emaSpreadSmall = emaSpread <= avgPrice * 0.01  // 평균가의 1% 이하
+
+    // 4. ADX가 낮음
+    adxLow = adxValue < adxThresholdBreakout
+
+    // 모든 조건 만족 시 횡보
+    atrLow and rangeSmall and emaSpreadSmall and adxLow
+
+    // ============================================================================
+    // 지능형 분석: 추세 시작 감지 (횡보 후 돌파)
+    // ============================================================================
+detectTrendBreakout() =>
+    // 이전에 횡보였고, 지금 추세가 시작되는지 확인
+    // detectSideways()는 매 바마다 호출되어야 하므로 먼저 계산 후 히스토리 참조
+    bool currentSideways = detectSideways()
+    bool wasSideways1 = currentSideways[1]
+    bool wasSideways2 = currentSideways[2]
+    bool wasSideways3 = currentSideways[3]
+    bool wasSideways = wasSideways1 or wasSideways2 or wasSideways3
+
+    // 현재 추세 강도 증가
+    bool adxRising = adxValue > adxValue[1] and adxValue >= adxThresholdBreakout
+
+    // 가격이 범위를 돌파 (함수 호출 결과를 먼저 변수에 저장)
+    float highestHigh = ta.highest(high, sidewaysLookback)
+    float lowestLow = ta.lowest(low, sidewaysLookback)
+    float prevHighest = highestHigh[1]
+    float prevLowest = lowestLow[1]
+    bool priceBreakout = close > prevHighest or close < prevLowest
+
+    // EMA 분리 시작
+    float emaSpread = math.abs(ema5 - ema200)
+    float emaSpreadPrev = math.abs(ema5[1] - ema200[1])
+    bool emaSeparating = emaSpread > emaSpreadPrev * 1.1  // 10% 이상 분리
+
+    wasSideways and (adxRising or priceBreakout) and emaSeparating
+
+    // ============================================================================
+    // 지능형 분석: 지지/저항선 자동 감지
+    // ============================================================================
+detectSupportResistance() =>
+    float supLevel = na
+    float resLevel = na
+    if not useSupportResistance
+        [supLevel, resLevel]
+    else
+    // 최적화: ta.lowest와 ta.highest는 매 바마다 호출되어야 하므로 먼저 계산
+    float lowestLow = ta.lowest(low, srLookback)
+    float highestHigh = ta.highest(high, srLookback)
+
+    // 최적화: 간단한 터치 카운트 방식 (이중 루프 최소화)
+    supLevel = lowestLow
+    resLevel = highestHigh
+
+    // 저점들 중에서 지지선 후보 찾기 (최소 srTouchCount 번 터치)
+    // 최적화: 최근 저점만 확인하여 성능 향상
+    float[] supportCandidates = array.new<float>()
+    for i = 1 to math.min(srLookback, 10)  // 최근 10개만 확인
+        lowVal = low[i]
+        touchCount = 0
+        tolerance = lowVal * 0.001  // 0.1% 오차 범위
+        for j = 1 to srLookback
+            if math.abs(low[j] - lowVal) <= tolerance
+                touchCount += 1
+            if touchCount >= srTouchCount
+                array.push(supportCandidates, lowVal)
+                break  // 최적화: 조건 만족 시 조기 종료
+
+    // 고점들 중에서 저항선 후보 찾기
+    float[] resistanceCandidates = array.new<float>()
+    for i = 1 to math.min(srLookback, 10)  // 최근 10개만 확인
+        highVal = high[i]
+        touchCount = 0
+        tolerance = highVal * 0.001
+        for j = 1 to srLookback
+            if math.abs(high[j] - highVal) <= tolerance
+                touchCount += 1
+            if touchCount >= srTouchCount
+                array.push(resistanceCandidates, highVal)
+                break  // 최적화: 조건 만족 시 조기 종료
+
+    // 가장 최근의 지지/저항선 선택
+    if array.size(supportCandidates) > 0
+    supLevel := array.get(supportCandidates, array.size(supportCandidates) - 1)
+
+    if array.size(resistanceCandidates) > 0
+    resLevel := array.get(resistanceCandidates, array.size(resistanceCandidates) - 1)
+
+    [supLevel, resLevel]
+
+    [supportLevel, resistanceLevel] = detectSupportResistance()
+
+    // ============================================================================
+    // 지능형 분석: 거래량 패턴 분석
+    // ============================================================================
+analyzeVolumePattern() =>
+    if not useVolumePattern
+    [false, false]
+    else
+    // 거래량 급증 확인
+    bool volSurge = volume >= avgVolumeLong * volumeSurgeMultiplier
+
+    // 거래량 추세 확인 (연속 증가: 과거→현재로 올수록 증가)
+    bool volTrendUp = true
+    for i = 1 to volumeTrendBars
+        if volume[i] <= volume[i+1]  // 과거로 갈수록 작아야 함 = 현재로 올수록 증가
+            volTrendUp := false
+            break
+
+    [volSurge, volTrendUp]
+
+    [volumeSurge, volumeTrendUp] = analyzeVolumePattern()
+
+    // ============================================================================
+    // 지능형 분석: 캔들 패턴 인식
+    // ============================================================================
+detectCandlePattern(isLong) =>
+    // 강세 패턴: 큰 양봉, 상승 삼각형, 하락 후 반등
+    bullishPattern = close > open and (close - open) > (high - low) * 0.6  // 몸통이 60% 이상
+    bullishPattern := bullishPattern and close > sma5Close  // 단기 평균 위 (캐시된 값 사용)
+
+    // 약세 패턴: 큰 음봉, 하락 삼각형, 상승 후 반락
+    bearishPattern = close < open and (open - close) > (high - low) * 0.6
+    bearishPattern := bearishPattern and close < sma5Close  // 단기 평균 아래 (캐시된 값 사용)
+
+    if isLong
+    bullishPattern
+    else
+    bearishPattern
+
+    // ============================================================================
+    // 지능형 분석: 신호 점수 계산 (0-100점)
+    // ============================================================================
+calculateSignalScore(isLong) =>
+    if not useSignalScore
+    100.0  // 신호 점수 비활성화 시 항상 통과
+    else
+    float score = 0.0
+
+    // 1. 추세 점수 (0-100)
+    trendScore = 0.0
+    if adxValue >= adxThresholdTrend
+    trendScore := 100.0
+    else if adxValue >= adxThresholdBreakout
+    trendScore := 70.0
+    else
+    trendScore := 30.0
+
+    // EMA 정렬 확인
+    if isLong
+    if ema5 > ema20 and ema20 > ema60 and ema60 > ema120
+    trendScore := trendScore + 20.0  // 완벽한 정렬 보너스
+    else
+    if ema5 < ema20 and ema20 < ema60 and ema60 < ema120
+    trendScore := trendScore + 20.0
+
+    score := score + trendScore * weightTrend / 100
+
+    // 2. 모멘텀 점수 (0-100)
+    momentumScore = 0.0
+    rsiScore = 0.0
+    if isLong
+    rsiScore := math.max(0, math.min(100, (rsi - 30) / 40 * 100))  // RSI 30-70 범위 정규화
+    else
+    rsiScore := math.max(0, math.min(100, (70 - rsi) / 40 * 100))
+
+    macdScore = 0.0
+    if isLong
+    if histLine > 0 and histLine > histLine[1]
+    macdScore := 100.0
+    else if histLine > 0
+    macdScore := 70.0
+    else
+    macdScore := 30.0
+    else
+    if histLine < 0 and histLine < histLine[1]
+    macdScore := 100.0
+    else if histLine < 0
+    macdScore := 70.0
+    else
+    macdScore := 30.0
+
+    momentumScore := (rsiScore + macdScore) / 2
+    score := score + momentumScore * weightMomentum / 100
+
+    // 3. 거래량 점수 (0-100)
+    volumeScore = 0.0
+    if volumeSurge
+    volumeScore := 100.0
+    else if volumeTrendUp
+    volumeScore := 80.0
+    else if volume >= avgVolumeLong
+    volumeScore := 60.0
+    else
+    volumeScore := 30.0
+
+    score := score + volumeScore * weightVolume / 100
+
+    // 4. 지지/저항 점수 (0-100)
+    srScore = 0.0
+    if isLong
+    if not na(supportLevel) and close <= supportLevel * 1.005 and close >= supportLevel * 0.995
+    srScore := 100.0  // 지지선 근처에서 반등
+    else if not na(supportLevel) and close > supportLevel
+    srScore := 70.0  // 지지선 위
+    else
+    srScore := 50.0
+    else
+    if not na(resistanceLevel) and close >= resistanceLevel * 0.995 and close <= resistanceLevel * 1.005
+    srScore := 100.0  // 저항선 근처에서 반락
+    else if not na(resistanceLevel) and close < resistanceLevel
+    srScore := 70.0  // 저항선 아래
+    else
+    srScore := 50.0
+
+    score := score + srScore * weightSupportResistance / 100
+
+    // 5. 패턴 점수 (0-100)
+    patternScore = 0.0
+    if detectCandlePattern(isLong)
+    patternScore := 100.0
+    else
+    patternScore := 50.0
+
+    score := score + patternScore * weightPattern / 100
+
+    // 최종 점수 (0-100)
+    math.min(100.0, math.max(0.0, score))
+
+    // ============================================================================
+    // 지능형 분석: 시장 상태 분류
+    // ============================================================================
+classifyMarketState() =>
+    // 상태: "trending_up", "trending_down", "sideways", "high_volatility", "low_volatility"
+    string state = "sideways"
+
+    // detectSideways()는 매 바마다 호출되어야 하므로 먼저 계산
+    bool isSideways = detectSideways()
+
+    // 추세 확인
+    if adxValue >= adxThresholdTrend
+    if close > ema200
+    state := "trending_up"
+    else
+    state := "trending_down"
+    else if isSideways
+    state := "sideways"
+
+    // 변동성 확인 (전역 변수 사용, 나누기 0 방지)
+    atrRatio = atrSma20 > 0 and not na(atrSma20) ? atr / atrSma20 : 1.0
+    if atrRatio >= 1.5
+    state := state + "_high_vol"
+    else if atrRatio <= 0.7
+    state := state + "_low_vol"
+
+    state
+
+    // ============================================================================
+    // 지능형 분석: 적응형 SL/TP 계산
+    // ============================================================================
+calculateAdaptiveSLTP(isLong, baseSL, baseTP) =>
+    if not useAdaptiveParams
+    [baseSL, baseTP]
+    else
+    marketState = classifyMarketState()
+    atrRatio = atrSma20 > 0 and not na(atrSma20) ? atr / atrSma20 : 1.0
+
+    // 변동성이 높으면 SL/TP 확대
+    float adaptiveFactor = 1.0
+    if atrRatio >= 1.5
+    adaptiveFactor := adaptiveVolatilityFactor
+    else if atrRatio <= 0.7
+    adaptiveFactor := 0.8  // 변동성 낮으면 축소
+
+    float newSL = na
+    float newTP = na
+
+    if isLong
+    slDistance = close - baseSL
+    tpDistance = baseTP - close
+    newSL := close - (slDistance * adaptiveFactor)
+    newTP := close + (tpDistance * adaptiveFactor)
+    else
+    slDistance = baseSL - close
+    tpDistance = close - baseTP
+    newSL := close + (slDistance * adaptiveFactor)
+    newTP := close - (tpDistance * adaptiveFactor)
+
+    [newSL, newTP]
+
+    // ============================================================================
+    // 지능형 분석: 통합 필터
+    // ============================================================================
+aiEngineFilterOK(isLong) =>
+    if not useAIEngine
+    true  // AI 엔진 비활성화 시 항상 통과
+    else
+        // 신호 점수 확인
+        signalScore = calculateSignalScore(isLong)
+        scoreOK = signalScore >= minSignalScore
+
+    // 기본 조건: 스프레드 OK
+    baseOK = spreadOK()
+
+    // 시나리오 1: 명확한 추세 중 (기존 로직)
+    inStrongTrend = adxValue >= adxThresholdTrend
+
+    // 시나리오 2: 횡보 후 추세 시작
+    trendBreakout = detectTrendBreakout()
+
+    // 시나리오 3: 지지/저항선 근처에서의 반등/반락 (범위 확대)
+    nearSupport = not na(supportLevel) and close <= supportLevel * 1.005 and close >= supportLevel * 0.995
+    nearResistance = not na(resistanceLevel) and close >= resistanceLevel * 0.995 and close <= resistanceLevel * 1.005
+
+    // 거래량 확인 (완화: 거래량 조건이 없어도 OK, 있으면 더 좋음)
+    volumeBonus = volumeSurge or volumeTrendUp  // 거래량 급증/증가는 보너스
+
+    // 최종 판단: 완화된 조건
+    // - 강한 추세 중이면 거래량 조건 없이도 OK
+    // - 횡보 후 돌파나 지지/저항 반등은 거래량 확인 권장
+    // - 기본 크로스 신호는 AI 필터를 완화하여 통과
+    scenario1 = inStrongTrend
+    scenario2 = trendBreakout
+    scenario3 = nearSupport or nearResistance
+
+    // 완화: 시나리오 중 하나만 만족하면 OK, 신호 점수는 선택적
+    (scenario1 or scenario2 or scenario3 or not useSignalScore) and baseOK
+
+    // 거래량 증가 + 긴 꼬리 기반 손절 계산
+calcVolumeWickSL(isLong) =>
+    if not useVolumeWickSL
+    na
+    else
+    // 이전 wickLookback 개의 캔들 중에서
+    float bestWick = na
+    float bestWickPrice = na
+
+    for i = 1 to wickLookback
+        // 거래량이 평균의 volumeMultiplier 배 이상인지 확인
+        volOK = volume[i] >= avgVolume * volumeMultiplier
+
+        if volOK
+            if isLong
+                // 롱: 하단 꼬리 (low - min(open, close))
+                wickSize = low[i] - math.min(open[i], close[i])
+                if na(bestWick) or wickSize > bestWick
+                    bestWick := wickSize
+                    bestWickPrice := low[i]
+            else
+                // 숏: 상단 꼬리 (max(open, close) - high)
+                wickSize = math.max(open[i], close[i]) - high[i]
+                if na(bestWick) or wickSize > bestWick
+                    bestWick := wickSize
+                    bestWickPrice := high[i]
+
+    bestWickPrice
+
+    // ============================================================================
+    // 상태 변수
+    // ============================================================================
+    var int currentLevel = 1  // 현재 진입 차수
+    var int profitLevel = 0   // 현재 수익청산 단계 (0-4)
+    var int lastEntryBar = 0  // 마지막 진입 바
+    var int totalTradeCount = 0  // 총 거래 횟수
+    var int lastTradeBar = 0  // 마지막 거래 바 (진입/청산 모두 포함)
+
+    // ============================================================================
+    // 유틸리티 함수
+    // ============================================================================
+
+    // 포지션 방향 확인
+getPositionDirection() =>
+    if strategy.position_size > 0
+    1
+    else if strategy.position_size < 0
+    -1
+    else
+    0
+
+    // 총 포지션 크기
+getTotalVolume() =>
+    math.abs(strategy.position_size)
+
+    // 총 손익 (달러)
+getTotalProfit() =>
+    strategy.netprofit
+
+    // 5/20 크로스 체크 (근본 원인 수정: 불필요한 캔들 색상 조건 제거)
+check520Cross() =>
+    // 현재 바와 이전 바의 EMA 값 비교
+    ma5_cur = ema5
+    ma5_prev = ema5[1]
+    ma20_cur = ema20
+    ma20_prev = ema20[1]
+
+    // 골든크로스: 5 EMA가 20 EMA를 상향 돌파 (캔들 색상 무관)
+    goldenCross = ma5_prev <= ma20_prev and ma5_cur > ma20_cur
+
+    // 데드크로스: 5 EMA가 20 EMA를 하향 돌파 (캔들 색상 무관)
+    deathCross = ma5_prev >= ma20_prev and ma5_cur < ma20_cur
+
+    if goldenCross
+    1
+    else if deathCross
+    -1
+    else
+    0
+
+    // 캔들이 EMA 위/아래에 있는지 확인 (인라인으로 직접 사용)
+
+    // ============================================================================
+    // 메인 로직
+    // ============================================================================
+
+    // 포지션 정보
+    int posDir = getPositionDirection()
+    float totalVol = getTotalVolume()
+    float totalProfit = getTotalProfit()
+
+    // 긴급 손절 체크 (최우선) - 계좌 전체 손실 한도 초과 시 전량 청산
+    // 이는 개별 거래 손절이 아닌, 계좌 전체의 최대 손실을 제한하는 안전장치입니다.
+    if not na(totalProfit) and totalProfit <= -math.abs(lossLimitDollar)
+    // 전량 청산
+    if strategy.position_size > 0
+    strategy.close("Long", comment="긴급손절_계좌한도")
+    else if strategy.position_size < 0
+    strategy.close("Short", comment="긴급손절_계좌한도")
+
+    // 상태 초기화
+    currentLevel := 1
+    profitLevel := 0
+    lastTradeBar := bar_index
+
+    // 트레일링 스톱 관리
+    if atr > 0 and not na(strategy.position_avg_price) and strategy.position_avg_price > 0
+    float trailDistance = trailATR * atr
+
+    if strategy.position_size > 0
+    // 롱 포지션: 하향 트레일링
+    float newSL = math.max(strategy.position_avg_price - trailDistance, close - trailDistance)
+    // 롱 포지션: sl은 현재 가격보다 낮아야 하고, 평균 진입가보다 낮아야 함
+    if newSL > strategy.position_avg_price * 0.99 and newSL < close and newSL > 0
+    strategy.exit("Long Trail", "Long", stop=newSL, comment="Trail Stop")
+
+    else if strategy.position_size < 0
+    // 숏 포지션: 상향 트레일링
+    float newSL = math.min(strategy.position_avg_price + trailDistance, close + trailDistance)
+    // 숏 포지션: sl은 현재 가격보다 높아야 하고, 평균 진입가보다 높아야 함
+    if newSL < strategy.position_avg_price * 1.01 and newSL > close
+    strategy.exit("Short Trail", "Short", stop=newSL, comment="Trail Stop")
+
+    // 단계별 수익청산 체크
+    if posDir != 0 and not na(totalProfit)
+    levels = array.new<float>()
+    array.push(levels, profitLevel1)
+    array.push(levels, profitLevel2)
+    array.push(levels, profitLevel3)
+    array.push(levels, profitLevel4)
+
+    // 여러 단계를 한 번에 처리할 수 있도록 while 루프 (안전장치 추가)
+    // Pine Script에서는 while 루프가 제한되어 있지만, 무한 루프 방지를 위해 최대 4회로 제한
+    int maxIterations = 0
+    while profitLevel < 4 and maxIterations < 4 and not na(totalProfit) and totalProfit >= array.get(levels, profitLevel)
+    // 부분 청산 (addLot만큼)
+    if strategy.position_size > 0
+    strategy.close("Long", qty=addLot, comment="PROFIT_L" + str.tostring(profitLevel + 1))
+    else if strategy.position_size < 0
+    strategy.close("Short", qty=addLot, comment="PROFIT_L" + str.tostring(profitLevel + 1))
+
+    profitLevel := profitLevel + 1
+    maxIterations := maxIterations + 1
+
+    // totalProfit을 다시 계산하여 다음 반복에서 정확한 값 사용
+    totalProfit := getTotalProfit()
+
+    // ============================================================================
+    // AI 엔진: 실시간 매매 판단 시스템
+    // ============================================================================
+
+    // ============================================================================
+    // 1단계: 실시간 시장 상태 감시 및 분류 (최적화: 한 번만 계산)
+    // ============================================================================
+    bool isSidewaysNow = detectSideways()
+    bool isTrendBreakoutNow = detectTrendBreakout()
+    float trendStrength = math.abs(adxValue)  // 추세 강도 (0-100)
+    string currentMarketState = classifyMarketState()  // isSidewaysNow 사용하므로 나중에 계산
+
+    // ============================================================================
+    // 2단계: 실시간 위험도 평가 (0-100점, 높을수록 위험)
+    // ============================================================================
+calculateRiskScore() =>
+    float risk = 0.0
+
+    // 변동성 위험 (ATR 기반, 전역 변수 사용, 나누기 0 방지)
+    atrRatio = atrSma20 > 0 and not na(atrSma20) ? atr / atrSma20 : 1.0
+    if atrRatio > 2.0
+    risk := risk + 30.0  // 매우 높은 변동성
+    else if atrRatio > 1.5
+    risk := risk + 20.0  // 높은 변동성
+    else if atrRatio < 0.5
+    risk := risk + 10.0  // 매우 낮은 변동성 (거래량 부족)
+
+    // 횡보장 위험 (최적화: 전역 변수 isSidewaysNow 사용)
+    if isSidewaysNow
+    risk := risk + 25.0  // 횡보장은 위험 높음
+
+    // 추세 약화 위험 (ADX 직접 계산)
+    float currentADX = math.abs(adxValue)
+    if currentADX < 15.0
+    risk := risk + 20.0  // 추세가 약하면 위험
+
+    // 거래량 부족 위험 (전역 변수 사용)
+    if not volumeSurge and not volumeTrendUp
+    risk := risk + 15.0
+
+    // RSI 극단값 위험
+    if rsi > 80 or rsi < 20
+    risk := risk + 10.0  // 과매수/과매도 구간
+
+    math.min(100.0, math.max(0.0, risk))
+
+    float currentRiskScore = calculateRiskScore()
+
+    // ============================================================================
+    // 3단계: 실시간 진입 신호 강도 평가 (0-100점)
+    // ============================================================================
+evaluateEntryStrength(isLong) =>
+    float strength = 0.0
+
+    // 기본 신호 점수 (이미 계산됨)
+    baseScore = calculateSignalScore(isLong)
+    strength := baseScore * 0.4  // 40% 가중치
+
+    // 추세 강도 (20% 가중치)
+    if isLong and close > ema200 and close > ema120
+    strength := strength + (trendStrength / 100.0) * 20.0
+    else if not isLong and close < ema200 and close < ema120
+    strength := strength + (trendStrength / 100.0) * 20.0
+
+    // 거래량 확인 (15% 가중치)
+    if volumeSurge
+    strength := strength + 15.0
+    else if volumeTrendUp
+    strength := strength + 10.0
+
+    // 지지/저항 확인 (15% 가중치)
+    if isLong
+    if not na(supportLevel) and close > 0
+    distanceToSupport = math.abs(close - supportLevel) / close
+    if distanceToSupport < 0.01  // 1% 이내
+    strength := strength + 15.0
+    else
+    if not na(resistanceLevel) and close > 0
+    distanceToResistance = math.abs(close - resistanceLevel) / close
+    if distanceToResistance < 0.01  // 1% 이내
+    strength := strength + 15.0
+
+    // 캔들 패턴 (10% 가중치)
+    if detectCandlePattern(isLong)
+    strength := strength + 10.0
+
+    math.min(100.0, math.max(0.0, strength))
+
+    float longEntryStrength = evaluateEntryStrength(true)
+    float shortEntryStrength = evaluateEntryStrength(false)
+
+    // ============================================================================
+    // 4단계: 실시간 손익비 최적화
+    // ============================================================================
+calculateOptimalRiskReward(isLong) =>
+    // 기본 손익비 (나누기 0 방지)
+    baseRR = slATR > 0 ? tpATR / slATR : 2.0  // 기본 TP/SL 비율 (slATR이 0이면 기본값 2.0 사용)
+
+    // 시장 상태에 따른 조정
+    float adjustedRR = baseRR
+
+    if isTrendBreakoutNow
+    adjustedRR := baseRR * 1.5  // 추세 시작 시 손익비 확대
+    else if isSidewaysNow
+    adjustedRR := baseRR * 0.7  // 횡보장에서는 손익비 축소
+
+    // 위험도에 따른 조정
+    if currentRiskScore > 70.0
+    adjustedRR := adjustedRR * 0.8  // 위험 높으면 손익비 축소
+    else if currentRiskScore < 30.0
+    adjustedRR := adjustedRR * 1.2  // 위험 낮으면 손익비 확대
+
+    // 신호 강도에 따른 조정
+    entryStrength = isLong ? longEntryStrength : shortEntryStrength
+    if entryStrength > 80.0
+    adjustedRR := adjustedRR * 1.3  // 강한 신호면 손익비 확대
+    else if entryStrength < 50.0
+    adjustedRR := adjustedRR * 0.9  // 약한 신호면 손익비 축소
+
+    math.max(1.5, math.min(5.0, adjustedRR))  // 최소 1.5, 최대 5.0
+
+    float optimalLongRR = calculateOptimalRiskReward(true)
+    float optimalShortRR = calculateOptimalRiskReward(false)
+
+    // ============================================================================
+    // 5단계: 실시간 포지션 크기 조정 (위험도 기반)
+    // ============================================================================
+calculateDynamicPositionSize(isLong) =>
+    baseSize = baseLot
+
+    // 위험도에 따른 조정
+    float sizeMultiplier = 1.0
+    if currentRiskScore > 70.0
+    sizeMultiplier := 0.5  // 위험 높으면 포지션 크기 50% 축소
+    else if currentRiskScore > 50.0
+    sizeMultiplier := 0.75  // 위험 중간이면 75%
+    else if currentRiskScore < 30.0
+    sizeMultiplier := 1.2  // 위험 낮으면 20% 확대
+
+    // 신호 강도에 따른 조정
+    entryStrength = isLong ? longEntryStrength : shortEntryStrength
+    if entryStrength > 80.0
+    sizeMultiplier := sizeMultiplier * 1.1  // 강한 신호면 10% 확대
+    else if entryStrength < 50.0
+    sizeMultiplier := sizeMultiplier * 0.8  // 약한 신호면 20% 축소
+
+    math.max(baseSize * 0.3, math.min(baseSize * 1.5, baseSize * sizeMultiplier))
+
+    // ============================================================================
+    // 6단계: 실시간 진입/청산 타이밍 최적화
+    // ============================================================================
+    // 최소 거래 간격 체크 (먼저 계산)
+    int barsSinceLastTrade = bar_index - lastTradeBar
+    bool canTradeByTime = barsSinceLastTrade >= minBarsBetweenTrades
+
+    // 신호 점수 실시간 계산 (최적화: 한 번만 계산하고 재사용)
+    float longSignalScore = calculateSignalScore(true)
+    float shortSignalScore = calculateSignalScore(false)
+
+    // AI 엔진 필터 결과 (매 바마다 실행 보장)
+    bool longAIFilterOK = aiEngineFilterOK(true)
+    bool shortAIFilterOK = aiEngineFilterOK(false)
+
+    // 실시간 진입 가능 여부 판단 (크로스 신호 없이도)
+    // 최적화: 기본 조건만 확인 (시나리오 체크는 aiEngineFilterOK에서 수행)
+    bool longEntryReady = longSignalScore >= minSignalScore and spreadOK() and canTradeByTime
+    bool shortEntryReady = shortSignalScore >= minSignalScore and spreadOK() and canTradeByTime
+
+    // 추가 진입 신호: 크로스 없이도 횡보 후 돌파나 지지/저항 반등으로 진입 가능
+    bool additionalLongSignal = false
+    bool additionalShortSignal = false
+
+    if useAIEngine
+    // 조건 1: 횡보 후 추세 시작 시 진입 (크로스 없이도) - 완화
+    if isTrendBreakoutNow and close > ema200 and longEntryReady and longEntryStrength > 40.0
+    additionalLongSignal := true
+
+    // 조건 2: 지지선 근처에서 반등 시 진입 - 완화
+    if not na(supportLevel) and close <= supportLevel * 1.01 and close >= supportLevel * 0.99 and close > close[1] and longEntryReady and longEntryStrength > 45.0
+    additionalLongSignal := true
+
+    // 조건 3: 저항선 근처에서 반락 시 진입 - 완화
+    if not na(resistanceLevel) and close >= resistanceLevel * 0.99 and close <= resistanceLevel * 1.01 and close < close[1] and shortEntryReady and shortEntryStrength > 45.0
+    additionalShortSignal := true
+
+    // 조건 4: 강한 추세 중 조정 구간에서 진입 (추세 방향 확인) - 완화
+    if trendStrength > 20.0 and not isSidewaysNow
+    // 상승 추세 중 조정 구간에서 롱 진입
+    if close > ema200 and close > ema60 and close < ema60 * 1.02 and longEntryReady and longEntryStrength > 50.0
+    additionalLongSignal := true
+    // 하락 추세 중 조정 구간에서 숏 진입
+    else if close < ema200 and close < ema60 and close > ema60 * 0.98 and shortEntryReady and shortEntryStrength > 50.0
+    additionalShortSignal := true
+
+    // 5/20 크로스 체크
+    int crossSignal = check520Cross()
+
+    // 크로스 신호 또는 추가 AI 신호로 진입
+    if crossSignal != 0 or additionalLongSignal or additionalShortSignal
+    // 신규 진입
+    if posDir == 0
+    // 진입 방향 결정: 크로스 신호 우선, 없으면 AI 신호
+    bool isLongSignal = crossSignal == 1 or additionalLongSignal
+    bool isShortSignal = crossSignal == -1 or additionalShortSignal
+
+    // 거래 횟수 제한 체크 + AI 엔진 필터 + 최소 거래 간격
+    bool canTrade = (maxTradeCount == 0 or totalTradeCount < maxTradeCount) and canTradeByTime
+
+    // 롱 진입: 기본 크로스는 AI 필터 완화, 추가 신호만 AI 필터 적용
+    filterOK = additionalLongSignal ? longAIFilterOK : (spreadOK() and canTradeByTime)
+    if isLongSignal and canTrade and filterOK
+    // 손절 계산: 거래량+꼬리 기반 또는 ATR 기반
+    float sl = na
+    float tp = na
+
+    // 먼저 거래량+꼬리 기반 손절 시도
+    float volumeWickSL = calcVolumeWickSL(true)
+
+    if atr > 0
+    // 롱 진입
+    if not na(volumeWickSL)
+    sl := volumeWickSL  // 거래량 증가 + 긴 꼬리 저가
+    else
+    sl := close - slATR * atr  // ATR 기반 폴백
+    tp := close + tpATR * atr
+
+    // 적응형 SL/TP 적용
+    [adaptiveSL, adaptiveTP] = calculateAdaptiveSLTP(true, sl, tp)
+    if not na(adaptiveSL)
+    sl := adaptiveSL
+    if not na(adaptiveTP)
+    tp := adaptiveTP
+
+    // 진입
+    string entryComment = crossSignal == 1 ? "GOLDEN_CROSS" : (additionalLongSignal ? "AI_BREAKOUT_LONG" : "AI_SIGNAL_LONG")
+    strategy.entry("Long", strategy.long, qty=baseLot, comment=entryComment)
+    // 롱 포지션: sl은 현재 가격보다 낮아야 하고, tp는 현재 가격보다 높아야 함
+    if not na(sl) and sl < close and sl > 0
+    strategy.exit("Long SL", "Long", stop=sl)
+    if not na(tp) and tp > close
+    strategy.exit("Long TP", "Long", limit=tp)
+
+    // 상태 업데이트
+    lastEntryBar := bar_index
+    lastTradeBar := bar_index
+    currentLevel := 1
+    profitLevel := 0
+    totalTradeCount := totalTradeCount + 1
+
+    // 숏 진입: 기본 크로스는 AI 필터 완화, 추가 신호만 AI 필터 적용
+    filterOKShort = additionalShortSignal ? shortAIFilterOK : (spreadOK() and canTradeByTime)
+    if isShortSignal and canTrade and filterOKShort
+    // AI 엔진: 실시간 위험도 및 신호 강도 확인
+    bool shouldEnter = currentRiskScore < 60.0 and shortEntryStrength > 55.0
+
+    if shouldEnter
+    // 손절 계산: 거래량+꼬리 기반 또는 ATR 기반
+    float sl = na
+    float tp = na
+
+    // 먼저 거래량+꼬리 기반 손절 시도
+    float volumeWickSL = calcVolumeWickSL(false)
+
+    if atr > 0
+    // 숏 진입
+    if not na(volumeWickSL)
+    sl := volumeWickSL  // 거래량 증가 + 긴 꼬리 고가
+    else
+    sl := close + slATR * atr  // ATR 기반 폴백
+
+    // AI 엔진: 최적 손익비 기반 TP 계산
+    float slDistance = sl - close
+    tp := close - (slDistance * optimalShortRR)
+
+    // 적응형 SL/TP 적용
+    [adaptiveSL, adaptiveTP] = calculateAdaptiveSLTP(false, sl, tp)
+    if not na(adaptiveSL)
+    sl := adaptiveSL
+    if not na(adaptiveTP)
+    tp := adaptiveTP
+
+    // AI 엔진: 동적 포지션 크기 조정
+    float dynamicQty = calculateDynamicPositionSize(false)
+
+    // 진입
+    string entryComment = crossSignal == -1 ? "DEATH_CROSS" : (additionalShortSignal ? "AI_BREAKOUT_SHORT" : "AI_SIGNAL_SHORT")
+    entryComment := entryComment + " | 강도:" + str.tostring(math.round(shortEntryStrength)) + " | 위험:" + str.tostring(math.round(currentRiskScore))
+    strategy.entry("Short", strategy.short, qty=dynamicQty, comment=entryComment)
+    // 숏 포지션: sl은 현재 가격보다 높아야 하고, tp는 현재 가격보다 낮아야 함
+    if not na(sl) and sl > close
+    strategy.exit("Short SL", "Short", stop=sl)
+    if not na(tp) and tp < close and tp > 0
+    strategy.exit("Short TP", "Short", limit=tp)
+
+    // 상태 업데이트
+    lastEntryBar := bar_index
+    lastTradeBar := bar_index
+    currentLevel := 1
+    profitLevel := 0
+    totalTradeCount := totalTradeCount + 1
+
+    // 반대 크로스 - 전량청산 후 반대진입
+    else if crossSignal == -posDir
+    if strategy.position_size > 0
+    strategy.close("Long", comment="REVERSE_CROSS")
+    else if strategy.position_size < 0
+    strategy.close("Short", comment="REVERSE_CROSS")
+
+    lastTradeBar := bar_index  // 청산도 거래로 간주
+
+    // 거래 횟수 제한 체크 + AI 엔진 필터 + 최소 거래 간격 (최적화: 전역 변수 사용)
+    bool isLongSignal = crossSignal == 1
+    bool reverseAIFilterOK = isLongSignal ? longAIFilterOK : shortAIFilterOK
+    bool canTrade = (maxTradeCount == 0 or totalTradeCount < maxTradeCount) and reverseAIFilterOK and canTradeByTime
+
+    if canTrade
+    // 손절 계산: 거래량+꼬리 기반 또는 ATR 기반
+    float sl = na
+    float tp = na
+
+    // 먼저 거래량+꼬리 기반 손절 시도
+    float volumeWickSL = calcVolumeWickSL(crossSignal == 1)
+
+    if atr > 0
+    if crossSignal == 1
+    // 롱 진입
+    if not na(volumeWickSL)
+    sl := volumeWickSL
+    else
+    sl := close - slATR * atr
+    tp := close + tpATR * atr
+    else
+    // 숏 진입
+    if not na(volumeWickSL)
+    sl := volumeWickSL
+    else
+    sl := close + slATR * atr
+    tp := close - tpATR * atr
+
+    // 적응형 SL/TP 적용
+    [adaptiveSL, adaptiveTP] = calculateAdaptiveSLTP(crossSignal == 1, sl, tp)
+    if not na(adaptiveSL)
+    sl := adaptiveSL
+    if not na(adaptiveTP)
+    tp := adaptiveTP
+
+    // 반대 진입
+    if crossSignal == 1
+    strategy.entry("Long", strategy.long, qty=baseLot, comment="REVERSE_BUY")
+    // 롱 포지션: sl은 현재 가격보다 낮아야 하고, tp는 현재 가격보다 높아야 함
+    if not na(sl) and sl < close and sl > 0
+    strategy.exit("Reverse Long SL", "Long", stop=sl)
+    if not na(tp) and tp > close
+    strategy.exit("Reverse Long TP", "Long", limit=tp)
+    else
+    strategy.entry("Short", strategy.short, qty=baseLot, comment="REVERSE_SELL")
+    // 숏 포지션: sl은 현재 가격보다 높아야 하고, tp는 현재 가격보다 낮아야 함
+    if not na(sl) and sl > close
+    strategy.exit("Reverse Short SL", "Short", stop=sl)
+    if not na(tp) and tp < close and tp > 0
+    strategy.exit("Reverse Short TP", "Short", limit=tp)
+
+    // 상태 업데이트
+    lastEntryBar := bar_index
+    lastTradeBar := bar_index
+    currentLevel := 1
+    profitLevel := 0
+    totalTradeCount := totalTradeCount + 1
+
+    // 피라미딩 (10봉 이후)
+    if posDir != 0
+    int barsSince = bar_index - lastEntryBar
+
+    if barsSince >= waitBarsAfterEntry and getTotalVolume() + addLot <= maxPositionLots
+    // 매수
+    if posDir > 0
+    if currentLevel == 1 and close > ema60
+    strategy.entry("Long", strategy.long, qty=addLot, comment="LEVEL_2")
+    currentLevel := 2
+    else if currentLevel == 2 and close > ema120
+    strategy.entry("Long", strategy.long, qty=addLot, comment="LEVEL_3")
+    currentLevel := 3
+    else if currentLevel == 3 and close > ema200
+    strategy.entry("Long", strategy.long, qty=addLot, comment="LEVEL_4")
+    currentLevel := 4
+
+    // 매도
+    else
+    if currentLevel == 1 and close < ema60
+    strategy.entry("Short", strategy.short, qty=addLot, comment="LEVEL_2")
+    currentLevel := 2
+    else if currentLevel == 2 and close < ema120
+    strategy.entry("Short", strategy.short, qty=addLot, comment="LEVEL_3")
+    currentLevel := 3
+    else if currentLevel == 3 and close < ema200
+    strategy.entry("Short", strategy.short, qty=addLot, comment="LEVEL_4")
+    currentLevel := 4
+
+    // 차수별 청산 체크
+    if posDir != 0
+    // 매수 포지션
+    if posDir > 0
+    // 4차: 200EMA 아래
+    if currentLevel >= 4 and close < ema200
+    strategy.close("Long", qty=addLot, comment="L4_BELOW_200EMA")
+    lastTradeBar := bar_index
+    if currentLevel == 4
+    currentLevel := 3
+
+    // 3차: 120EMA 아래
+    else if currentLevel >= 3 and close < ema120
+    strategy.close("Long", qty=addLot, comment="L3_BELOW_120EMA")
+    lastTradeBar := bar_index
+    if currentLevel == 3
+    currentLevel := 2
+
+    // 2차: 60EMA 아래
+    else if currentLevel >= 2 and close < ema60
+    strategy.close("Long", qty=addLot, comment="L2_BELOW_60EMA")
+    lastTradeBar := bar_index
+    if currentLevel == 2
+    currentLevel := 1
+
+    // 매도 포지션
+    else
+    // 4차: 200EMA 위
+    if currentLevel >= 4 and close > ema200
+    strategy.close("Short", qty=addLot, comment="L4_ABOVE_200EMA")
+    lastTradeBar := bar_index
+    if currentLevel == 4
+    currentLevel := 3
+
+    // 3차: 120EMA 위
+    else if currentLevel >= 3 and close > ema120
+    strategy.close("Short", qty=addLot, comment="L3_ABOVE_120EMA")
+    lastTradeBar := bar_index
+    if currentLevel == 3
+    currentLevel := 2
+
+    // 2차: 60EMA 위
+    else if currentLevel >= 2 and close > ema60
+    strategy.close("Short", qty=addLot, comment="L2_ABOVE_60EMA")
+    lastTradeBar := bar_index
+    if currentLevel == 2
+    currentLevel := 1
+
+    // ============================================================================
+    // 시각화
+    // ============================================================================
+
+    // EMA 라인 플롯
+    plot(ema5, "EMA 5", color=color.blue, linewidth=1)
+    plot(ema20, "EMA 20", color=color.orange, linewidth=2)
+    plot(ema60, "EMA 60", color=color.yellow, linewidth=1)
+    plot(ema120, "EMA 120", color=color.purple, linewidth=1)
+    plot(ema200, "EMA 200", color=color.red, linewidth=2)
+
+    // 진입 마커 (신호 점수 포함, 기본 크로스는 필터 완화)
+    bool longEntryOK = crossSignal == 1 and posDir == 0 and spreadOK() and canTradeByTime
+    bool shortEntryOK = crossSignal == -1 and posDir == 0 and spreadOK() and canTradeByTime
+
+    // plotshape의 text 파라미터는 const string이어야 하므로 동적 문자열 제거
+    plotshape(longEntryOK, title="Golden Cross", style=shape.labelup, location=location.belowbar, color=color.green, textcolor=color.white, size=size.small)
+    plotshape(shortEntryOK, title="Death Cross", style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, size=size.small)
+
+    // 배경색 (추세 표시)
+    bgcolor(close > ema200 ? color.new(color.green, 95) : color.new(color.red, 95))
+
+    // AI 엔진: 횡보 구간 표시 (isSidewaysNow 변수 사용 - 이미 매 바마다 계산됨)
+    bgcolor(isSidewaysNow ? color.new(color.yellow, 97) : na, title="횡보 구간")
+
+    // AI 엔진: 추세 시작 표시 (isTrendBreakoutNow 변수 사용 - 이미 매 바마다 계산됨)
+    bgcolor(isTrendBreakoutNow ? color.new(color.blue, 90) : na, title="추세 시작")
+
+    // 지지/저항선 플롯
+    plot(useSupportResistance ? supportLevel : na, "지지선", color=color.green, linewidth=1, style=plot.style_linebr)
+    plot(useSupportResistance ? resistanceLevel : na, "저항선", color=color.red, linewidth=1, style=plot.style_linebr)
+
+    // ============================================================================
+    // 알림 설정
+    // ============================================================================
+
+    // 롱 진입 신호 (AI 분석 포함)
+    alertcondition(longEntryOK, title="롱 진입 (AI 분석)", message="{{ticker}} | {{close}} | 롱 진입 | 신호점수: {{plot_7}} | ADX: {{plot_9}} | RSI: {{plot_10}} | MACD: {{plot_11}}")
+
+    // 숏 진입 신호 (AI 분석 포함)
+    alertcondition(shortEntryOK, title="숏 진입 (AI 분석)", message="{{ticker}} | {{close}} | 숏 진입 | 신호점수: {{plot_8}} | ADX: {{plot_9}} | RSI: {{plot_10}} | MACD: {{plot_11}}")
+
+    // 횡보 후 추세 시작 신호
+    alertcondition(additionalLongSignal, title="AI 돌파 롱", message="{{ticker}} | {{close}} | 횡보 후 추세 시작 - 롱 진입 | ADX: {{plot_9}}")
+    alertcondition(additionalShortSignal, title="AI 돌파 숏", message="{{ticker}} | {{close}} | 횡보 후 추세 시작 - 숏 진입 | ADX: {{plot_9}}")
+
+    // 기존 크로스 신호 (하위 호환성)
+    alertcondition(crossSignal == 1, title="골든크로스", message="EMA MultiCross: 골든크로스 발생")
+    alertcondition(crossSignal == -1, title="데드크로스", message="EMA MultiCross: 데드크로스 발생")
+
+    // 알림 메시지용 플롯
+    plot(longSignalScore, "롱 신호 점수")
+    plot(shortSignalScore, "숏 신호 점수")
+    plot(adxValue, "ADX 값")
+    plot(rsi, "RSI 값")
+    plot(histLine, "MACD 히스토그램")

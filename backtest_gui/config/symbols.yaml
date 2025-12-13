@@ -1,0 +1,48 @@
+# 심볼 목록 설정
+
+futures:
+  - symbol: "ES1!"
+    name: "E-mini S&P 500"
+  - symbol: "NQ1!"
+    name: "E-mini NASDAQ"
+  - symbol: "YM1!"
+    name: "E-mini Dow Jones"
+  - symbol: "RTY1!"
+    name: "E-mini Russell 2000"
+  - symbol: "GC1!"
+    name: "Gold"
+  - symbol: "SI1!"
+    name: "Silver"
+  - symbol: "CL1!"
+    name: "Crude Oil"
+  - symbol: "NG1!"
+    name: "Natural Gas"
+
+crypto:
+  - symbol: "BTCUSD"
+    name: "Bitcoin"
+  - symbol: "ETHUSD"
+    name: "Ethereum"
+  - symbol: "ADAUSD"
+    name: "Cardano"
+  - symbol: "DOTUSD"
+    name: "Polkadot"
+  - symbol: "LINKUSD"
+    name: "Chainlink"
+
+forex:
+  - symbol: "EURUSD"
+    name: "Euro/US Dollar"
+  - symbol: "GBPUSD"
+    name: "British Pound/US Dollar"
+  - symbol: "USDJPY"
+    name: "US Dollar/Japanese Yen"
+  - symbol: "AUDUSD"
+    name: "Australian Dollar/US Dollar"
+  - symbol: "USDCAD"
+    name: "US Dollar/Canadian Dollar"
+  - symbol: "NZDUSD"
+    name: "New Zealand Dollar/US Dollar"
+  - symbol: "USDCHF"
+    name: "US Dollar/Swiss Franc"
+

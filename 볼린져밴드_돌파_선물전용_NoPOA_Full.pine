@@ -1,0 +1,529 @@
+//@version=5
+//@strategy_alert_message {{strategy.order.alert_message}}
+// POA 제거 - 순수 Pine Script 선물 전용 버전 (원본 100% 복원)
+// 원본: 볼린져밴드_돌파.fine
+// 변경: POA 라이브러리만 제거, 나머지는 100% 동일
+
+strategy("볼린저밴드돌파_선물전용_Full",
+         overlay=true, 
+         initial_capital=1000, 
+         commission_type=strategy.commission.percent, 
+         commission_value=0.05,
+         margin_long=0.1,
+         margin_short=0.1,
+         use_bar_magnifier=false)
+
+i_text = input.string("  ", "코인계정", tooltip = "예시 : 바이낸스_BTC_30분")
+
+// ========== 선물 설정 ==========
+market_type        = input.string("선물", "시장 유형", options=["코인", "선물"], group="선물 설정")
+use_auto_detect    = input.bool(true, "심볼 자동 감지", group="선물 설정")
+user_contract_value= input.float(100.0, "계약 가치(수동)", step=0.01, group="선물 설정")
+futures_lot_step   = input.float(0.1, "랏 스텝", step=0.01, group="선물 설정")
+futures_min_lot    = input.float(0.1, "최소 랏", step=0.01, group="선물 설정")
+
+// 심볼 자동 감지
+detect_contract_value() =>
+    string sym = syminfo.ticker
+    float cv = 1.0
+    
+    if str.contains(sym, "MES") or sym == "ES"
+        cv := 5.0
+    else if str.contains(sym, "MNQ") or str.contains(sym, "NQ") or str.contains(sym, "USTEC")
+        cv := 2.0
+    else if str.contains(sym, "CL") or str.contains(sym, "WTI")
+        cv := 1000.0
+    else if str.contains(sym, "NG") or str.contains(sym, "NATGAS")
+        cv := 10000.0
+    else if str.contains(sym, "GC") or str.contains(sym, "GOLD")
+        cv := 100.0
+    else if str.contains(sym, "SI") or str.contains(sym, "SILVER")
+        cv := 5000.0
+    else if str.contains(sym, "XAUUSD") or sym == "GOLD/USD"
+        cv := 100.0
+    else if sym == "EURUSD" or sym == "EUR/USD"
+        cv := 100000.0
+    else if sym == "GBPUSD" or sym == "GBP/USD"
+        cv := 100000.0
+    cv
+
+final_contract_value = use_auto_detect ? detect_contract_value() : user_contract_value
+
+// Entry Size
+exchange_decimal = input.int(3, "소수점 자릿수", minval=0, step=1, group="진입 설정")
+profit_balance = input.bool(true, "순이익 포함", group="진입 설정")
+sumcapital = profit_balance ? strategy.initial_capital + strategy.netprofit : strategy.initial_capital
+
+long_size = input.float(100, "롱 진입 크기", step=0.1, group="진입 설정")
+long_type = input.string("Percent ", "롱 타입", options=["Cash ", "Percent "], group="진입 설정")
+short_size = input.float(100, "숏 진입 크기", step=0.1, group="진입 설정")
+short_type = input.string("Percent ", "숏 타입", options=["Cash ", "Percent "], group="진입 설정")
+
+long_per_size = sumcapital * long_size / 100
+short_per_size = sumcapital * short_size / 100
+
+long_size_type(user_input_style) =>
+    user_input_style == "Cash " ? long_size * sumcapital : user_input_style == "Percent " ? long_per_size : na
+short_size_type(user_input_style) =>
+    user_input_style == "Cash " ? short_size * sumcapital : user_input_style == "Percent " ? short_per_size : na
+
+// Colored Bar by Volume (원본 그대로)
+visible_bcolor = input.bool(true, "볼륨 바 표시", group="볼륨 필터")
+vollength = input.int(20, "MA 길이", minval=1, group="볼륨 필터")
+avrg = ta.sma(volume, vollength)
+
+thresholdExtraHigh = input.float(4, "초고", step=0.5, group="볼륨 필터")
+thresholdHigh = input.float(2.5, "고", step=0.5, group="볼륨 필터")
+thresholdMedium = input.float(1, "중", step=0.5, group="볼륨 필터")
+thresholdNormal = input.float(0.5, "저", step=0.5, group="볼륨 필터")
+
+vol1 = volume > avrg * thresholdExtraHigh
+vol2 = volume >= avrg * thresholdHigh and volume <= avrg * thresholdExtraHigh
+vol3 = volume >= avrg * thresholdMedium and volume <= avrg * thresholdHigh
+vol4 = volume >= avrg * thresholdNormal and volume <= avrg * thresholdMedium
+vol5 = volume < avrg * thresholdNormal
+
+l_act_low_size = input.bool(true, "롱 저볼륨", group="볼륨 필터")
+l_act_normal_size = input.bool(true, "롱 일반볼륨", group="볼륨 필터")
+l_act_medium_size = input.bool(true, "롱 중볼륨", group="볼륨 필터")
+l_act_high_size = input.bool(true, "롱 고볼륨", group="볼륨 필터")
+l_act_extrahigh_size = input.bool(true, "롱 초고볼륨", group="볼륨 필터")
+
+s_act_low_size = input.bool(true, "숏 저볼륨", group="볼륨 필터")
+s_act_normal_size = input.bool(true, "숏 일반볼륨", group="볼륨 필터")
+s_act_medium_size = input.bool(true, "숏 중볼륨", group="볼륨 필터")
+s_act_high_size = input.bool(true, "숏 고볼륨", group="볼륨 필터")
+s_act_extrahigh_size = input.bool(true, "숏 초고볼륨", group="볼륨 필터")
+
+vol_long_entry = l_act_low_size and vol5 ? true : l_act_normal_size and vol4 ? true : l_act_medium_size and vol3 ? true : l_act_high_size and vol2 ? true : l_act_extrahigh_size and vol1 ? true : false
+vol_short_entry = s_act_low_size and vol5 ? true : s_act_normal_size and vol4 ? true : s_act_medium_size and vol3 ? true : s_act_high_size and vol2 ? true : s_act_extrahigh_size and vol1 ? true : false
+
+color_1 = input.color(#ffffff, "", group="볼륨 필터")
+color_2 = input.color(#d1d4dc, "", group="볼륨 필터")
+color_3 = input.color(#9598a1, "", group="볼륨 필터")
+color_4 = input.color(#5d606b, "", group="볼륨 필터")
+color_5 = input.color(#2a2e39, "", group="볼륨 필터")
+
+color_bar = vol1 ? color_5 : vol2 ? color_4 : vol3 ? color_3 : vol4 ? color_2 : vol5 ? color_1 : na
+barcolor(visible_bcolor ? color_bar : na, editable=false)
+
+// Bollinger Bands (원본 그대로)
+active_long = input.bool(true, "롱 활성화", group='볼린저밴드')
+active_short = input.bool(true, "숏 활성화", group='볼린저밴드')
+lbb_close = input.string('Lower ', '롱 청산선', options = ['Basis ', 'Lower '], group='볼린저밴드')
+sbb_close = input.string('Upper ', '숏 청산선', options = ['Basis ', 'Upper '], group='볼린저밴드')
+lbbmaType = input.string("SMA", "롱 MA 타입", options = ["SMA", "EMA", "RMA", "WMA", "VWMA "], group='볼린저밴드')
+sbbmaType = input.string("SMA", "숏 MA 타입", options = ["SMA", "EMA", "RMA", "WMA", "VWMA "], group='볼린저밴드')
+lbbLengthInput = input.int(15, title="롱 길이", group="볼린저밴드")
+lbbDevInput = input.float(2.0, title="롱 편차", step=0.1, group="볼린저밴드")
+lbbMinWidth = input.float(3.0, title="롱 최소폭", step=0.5, group="볼린저밴드")
+lbbDiff = input.bool(false, title='롱 BB Diff 활성화', group="볼린저밴드")
+lbbDiffPerc = input.float(2, step=0.1, title='롱 BB Diff %', group="볼린저밴드")
+sbbLengthInput = input.int(15, title="숏 길이", group="볼린저밴드")
+sbbDevInput = input.float(2.0, title="숏 편차", step=0.1, group="볼린저밴드")
+sbbMinWidth = input.float(3.0, title="숏 최소폭", step=0.5, group="볼린저밴드")
+sbbDiff = input.bool(false, title='숏 BB Diff 활성화', group="볼린저밴드")
+sbbDiffPerc = input.float(2, step=0.1, title='숏 BB Diff %', group="볼린저밴드")
+
+ma(source, length, _type) =>
+    switch _type
+        "SMA" => ta.sma(source, length)
+        "EMA" => ta.ema(source, length)
+        "RMA" => ta.rma(source, length)
+        "WMA" => ta.wma(source, length)
+        "VWMA " => ta.vwma(source, length)
+
+lbbMiddle = ma(close, lbbLengthInput, lbbmaType)
+lbbdev = lbbDevInput * ta.stdev(close, lbbLengthInput)
+lbbdev := math.max(lbbdev, lbbMiddle * lbbMinWidth / 100)
+lbbUpper = lbbMiddle + lbbdev
+lbbLower = lbbMiddle - lbbdev
+
+sbbMiddle = ma(close, sbbLengthInput, sbbmaType)
+sbbdev = sbbDevInput * ta.stdev(close, sbbLengthInput)
+sbbdev := math.max(sbbdev, sbbMiddle * sbbMinWidth / 100)
+sbbUpper = sbbMiddle + sbbdev
+sbbLower = sbbMiddle - sbbdev
+
+lbbLowerCrossUnder = ta.crossunder(close, lbbLower)
+lbbUpperCrossOver = ta.crossover(close, lbbUpper)
+sbbLowerCrossUnder = ta.crossunder(close, sbbLower)
+sbbUpperCrossOver = ta.crossover(close, sbbUpper)
+
+lbbDiffCond = lbbDiff ? ((lbbUpper / lbbLower) * 100) - 100 >= lbbDiffPerc : true
+sbbDiffCond = sbbDiff ? ((sbbUpper / sbbLower) * 100) - 100 >= sbbDiffPerc : true
+
+plot(active_long ? lbbMiddle : na, "롱 중심", color=color.blue)
+lbbUpperPlot = plot(active_long ? lbbUpper : na, "롱 상단", color=color.new(color.blue, 80))
+lbbLowerrPlot = plot(active_long ? lbbLower : na, "롱 하단", color=color.new(color.blue, 80))
+fill(lbbUpperPlot, lbbLowerrPlot, title = "롱 배경", color=active_long ? color.new(color.blue, 90) : na)
+
+plot(active_short ? sbbMiddle : na, "숏 중심", color=color.red)
+sbbUpperPlot = plot(active_short ? sbbUpper : na, "숏 상단", color=color.new(color.red, 80))
+sbbLowerrPlot = plot(active_short ? sbbLower : na, "숏 하단", color=color.new(color.red, 80))
+fill(sbbUpperPlot, sbbLowerrPlot, title = "숏 배경", color=active_short ? color.new(color.red, 90) : na)
+
+// ARMA (원본 그대로)
+enable_long_arma = input(false, "Enable Long     ", inline="ara1", group="Autonomous Recursive Moving Average")
+enable_short_arma = input(false, "Enable Short",  inline="ara1", group="Autonomous Recursive Moving Average")
+ara_length = input.int(13, "Length ", group="Autonomous Recursive Moving Average")
+gamma = input.float(3.0, "Gamma ", step=0.1, group="Autonomous Recursive Moving Average")
+
+var float ma = na
+var float mad = na
+float src_ = close
+ma := nz(mad[1], src_)
+float d = ta.cum(math.abs(src_[ara_length] - ma)) / bar_index * gamma
+mad := ta.sma(ta.sma(src_ > nz(mad[1], src_) + d ? src_ + d : src_ < nz(mad[1], src_) - d ? src_ - d : nz(mad[1], src_), ara_length), ara_length)
+
+arma_long_condt = enable_long_arma ? close > mad : true
+arma_short_condt = enable_short_arma ? close < mad : true
+
+plot(mad, title='ARA', color=enable_long_arma or enable_short_arma ? color.new(color.orange, 20) : na, style=plot.style_line, linewidth=2)
+
+// Volatility Filter (원본 그대로)
+lvolatilityFilterInput = input.bool(false, title="Enable Long     ", group="Volatility Filter", inline="Vol1")
+lvolatilityFilterStDevLength = input(2, title="StdDev ", group="Volatility Filter", inline="Vol2")
+lvolatilityStDevMaLength = input(2, title="MA  ", group="Volatility Filter", inline="Vol3")
+
+svolatilityFilterInput = input.bool(false, title="Enable Short", group="Volatility Filter", inline="Vol1")
+svolatilityFilterStDevLength = input(2, title="StdDev ", group="Volatility Filter", inline="Vol2")
+svolatilityStDevMaLength = input(2, title="MA  ", group="Volatility Filter", inline="Vol3")
+
+lstdDevClose = ta.stdev(close, lvolatilityFilterStDevLength)
+lvolatilityCondition = lvolatilityFilterInput ? lstdDevClose > ta.sma(lstdDevClose, lvolatilityStDevMaLength) : true
+
+sstdDevClose = ta.stdev(close, svolatilityFilterStDevLength)
+svolatilityCondition = svolatilityFilterInput ? sstdDevClose > ta.sma(sstdDevClose, svolatilityStDevMaLength) : true
+
+// Historical Volatility Filter (원본 그대로)
+enable_long_vol = input(false, "Enable Long     ", inline="vol1", group="Historical Volatility Filter")
+enable_short_vol = input(false, "Enable Short ",  inline="vol1", group="Historical Volatility Filter")
+HVlength = input.int(10, "Length ", minval=1, inline="vol2", group="Historical Volatility Filter")
+HVthreshold = input.int(1, "Threshold ", minval=1, inline="vol2", group="Historical Volatility Filter")
+HVper = timeframe.isintraday or timeframe.isdaily and timeframe.multiplier == 1 ? 1 : 7
+HV = 100 * ta.stdev(math.log(close / close[1]), HVlength) * math.sqrt(365 / HVper)
+
+HV_long_condt = enable_long_vol ? (HV - HV[1]) > HVthreshold : true
+HV_short_condt = enable_short_vol ? (HV - HV[1]) > HVthreshold : true
+
+// ADX Filter (원본 그대로)
+enable_long_adx = input(false, "Enable Long     ", inline="adx1", group="ADX Filter")
+enable_short_adx = input(false, "Enable Short ", inline="adx1", group="ADX Filter")
+long_adxlen = input.int(14, "Length ", minval=1, inline="adx2", group="ADX Filter")
+short_adxlen = input.int(14, "Length ", minval=1, inline="adx2", group="ADX Filter")
+
+TrueRange = math.max(math.max(high - low, math.abs(high - nz(close[1]))), math.abs(low - nz(close[1])))
+DirectionalMovementPlus = high - nz(high[1]) > nz(low[1]) - low ? math.max(high - nz(high[1]), 0) : 0
+DirectionalMovementMinus = nz(low[1]) - low > high - nz(high[1]) ? math.max(nz(low[1]) - low, 0) : 0
+
+var float long_SmoothedTrueRange = 0.0
+long_SmoothedTrueRange := nz(long_SmoothedTrueRange[1]) - nz(long_SmoothedTrueRange[1]) / long_adxlen + TrueRange
+
+var float long_SmoothedDirectionalMovementPlus = 0.0
+long_SmoothedDirectionalMovementPlus := nz(long_SmoothedDirectionalMovementPlus[1]) - nz(long_SmoothedDirectionalMovementPlus[1]) / long_adxlen + DirectionalMovementPlus
+
+var float long_SmoothedDirectionalMovementMinus = 0.0
+long_SmoothedDirectionalMovementMinus := nz(long_SmoothedDirectionalMovementMinus[1]) - nz(long_SmoothedDirectionalMovementMinus[1]) / long_adxlen + DirectionalMovementMinus
+
+float long_DIPlus = long_SmoothedDirectionalMovementPlus / long_SmoothedTrueRange * 100
+float long_DIMinus = long_SmoothedDirectionalMovementMinus / long_SmoothedTrueRange * 100
+float long_DX = math.abs(long_DIPlus - long_DIMinus) / (long_DIPlus + long_DIMinus) * 100
+float long_ADX = ta.sma(long_DX, long_adxlen)
+
+var float short_SmoothedTrueRange = 0.0
+short_SmoothedTrueRange := nz(short_SmoothedTrueRange[1]) - nz(short_SmoothedTrueRange[1]) / short_adxlen + TrueRange
+
+var float short_SmoothedDirectionalMovementPlus = 0.0
+short_SmoothedDirectionalMovementPlus := nz(short_SmoothedDirectionalMovementPlus[1]) - nz(short_SmoothedDirectionalMovementPlus[1]) / short_adxlen + DirectionalMovementPlus
+
+var float short_SmoothedDirectionalMovementMinus = 0.0
+short_SmoothedDirectionalMovementMinus := nz(short_SmoothedDirectionalMovementMinus[1]) - nz(short_SmoothedDirectionalMovementMinus[1]) / short_adxlen + DirectionalMovementMinus
+
+float short_DIPlus = short_SmoothedDirectionalMovementPlus / short_SmoothedTrueRange * 100
+float short_DIMinus = short_SmoothedDirectionalMovementMinus / short_SmoothedTrueRange * 100
+float short_DX = math.abs(short_DIPlus - short_DIMinus) / (short_DIPlus + short_DIMinus) * 100
+float short_ADX = ta.sma(short_DX, short_adxlen)
+
+bool adx_long_condt = enable_long_adx ? long_DIPlus > long_DIPlus[1] and long_DIPlus > long_DIMinus : true
+bool adx_short_condt = enable_short_adx ? short_DIMinus > short_DIMinus[1] and short_DIPlus < short_DIMinus : true
+
+// Volume OSC (원본 그대로)
+enable_vosc_long = input.bool(false, title="Enable Long     ", group="Volume OSC", inline="vosc1")
+enable_vosc_short = input.bool(false, title="Enable Short", group="Volume OSC", inline="vosc1", tooltip="볼륨 오실레이터")
+slen_vosc_long = input.int(5, minval=1, title = "롱 단기", group="Volume OSC", inline="vosc2")
+slen_vosc_short = input.int(5, minval=1, title = "숏 단기", group="Volume OSC", inline="vosc2")
+longlen_vosc_long = input.int(10, minval=1, title = "롱 장기", group="Volume OSC", inline="vosc3")
+longlen_vosc_short = input.int(10, minval=1, title = "숏 장기", group="Volume OSC", inline="vosc3")
+vosc_var_long = input.float(0, minval=0, step = 0.5, title = "OSC 롱", group="Volume OSC", inline="vosc4")
+vosc_var_short = input.float(0, minval=0, step = 0.5, title = "OSC 숏", group="Volume OSC", inline="vosc4")
+
+float sema_vosc_long = ta.ema(volume, slen_vosc_long)
+float lema_vosc_long = ta.ema(volume, longlen_vosc_long)
+float osc_long = 100 * (sema_vosc_long - lema_vosc_long) / lema_vosc_long
+bool osc_long_cond = enable_vosc_long ? osc_long > vosc_var_long : true
+
+float sema_vosc_short = ta.ema(volume, slen_vosc_short)
+float lema_vosc_short = ta.ema(volume, longlen_vosc_short)
+float osc_short = 100 * (sema_vosc_short - lema_vosc_short) / lema_vosc_short
+bool osc_short_cond = enable_vosc_short ? osc_short > vosc_var_short : true
+
+// AI Trend (간소화 - KNN 제거)
+ait_enable_long = input.bool(false, "Enable Long", inline="ait1", group="AI Trend Filter")
+ait_enable_short = input.bool(false, "Enable Short", inline="ait1", group="AI Trend Filter")
+
+bool ait_long_cond = true
+bool ait_short_cond = true
+
+// ATR
+atrLength = input.int(14, "ATR Length", group="TAKE PROFIT / Stop Loss")
+atr = ta.atr(atrLength)
+
+// TAKE PROFIT (원본 그대로)
+longtakeProfitTrailingEnabled = input.bool(false, title="Enable Trailing", group="TAKE PROFIT", inline="tp0")
+longdistancePerc = input.float(0.005, title="TP % ", step=0.005, group="TAKE PROFIT", inline="tp1")
+longtakeProfitMethod = input.string("PERC ", "롱 방식", options=["PERC ", "ATR ", "BOTH "], group="TAKE PROFIT", inline="tp2")
+longtakeProfitQuantityPerc = input.float(100, title="롱 수량 % ", step=0.1, group="TAKE PROFIT", inline="tp3")
+longTakeProfitPerc = input.float(0.02, title="롱 % ", step=0.01, group="TAKE PROFIT", inline="tp4")
+longTakeProfitAtrMul = input.float(1.0, title="롱 ATR ", step=0.1, group="TAKE PROFIT", inline="tp5")
+
+shorttakeProfitTrailingEnabled = input.bool(false, title="Enable Trailing", group="TAKE PROFIT", inline="tp0")
+shortdistancePerc = input.float(0.005, title="TP % ", step=0.005, group="TAKE PROFIT", inline="tp1")
+shorttakeProfitMethod = input.string("PERC ", "숏 방식", options=["PERC ", "ATR ", "BOTH "], group="TAKE PROFIT", inline="tp2")
+shorttakeProfitQuantityPerc = input.float(100, title="숏 수량 % ", step=0.1, group="TAKE PROFIT", inline="tp3")
+shortTakeProfitPerc = input.float(0.02, title="숏 % ", step=0.01, group="TAKE PROFIT", inline="tp4")
+shortTakeProfitAtrMul = input.float(1.0, title="숏 ATR ", step=0.1, group="TAKE PROFIT", inline="tp5")
+
+// Stop Loss (원본 그대로)
+stopLossTrailingEnabled = input.bool(false, title="Enable Trailing", group="Stop Loss", inline="sl0")
+stopLossMethod = input.string("TP ", "Stop Loss 모드", options=["TP ", "ON "], group="Stop Loss", inline="sl1")
+
+longbreakEvenEnabled = input.bool(false, title="Enable Long Break Even", group="Stop Loss", inline="sl2")
+longstopLossMethod = input.string("BOTH ", "롱 방식", options=["PERC ", "ATR ", "BOTH "], group="Stop Loss", inline="sl3")
+longTrailingStopLossPerc = input.float(0.07, title="롱 % ", step=0.01, group="Stop Loss", inline="sl4")
+longStopLossAtrMul = input.float(2.0, title="롱 ATR ", step=0.1, group="Stop Loss", inline="sl5")
+
+shortbreakEvenEnabled = input.bool(false, title="Enable Short Break Even", group="Stop Loss", inline="sl2")
+shortstopLossMethod = input.string("BOTH ", "숏 방식", options=["PERC ", "ATR ", "BOTH "], group="Stop Loss", inline="sl3")
+shortTrailingStopLossPerc = input.float(0.07, title="숏 % ", step=0.01, group="Stop Loss", inline="sl4")
+shortStopLossAtrMul = input.float(2.0, title="숏 ATR ", step=0.1, group="Stop Loss", inline="sl5")
+
+// 진입/청산 조건
+bool openLongPosition = ait_long_cond and osc_long_cond and active_long and lbbUpperCrossOver and lbbDiffCond and lvolatilityCondition and HV_long_condt and adx_long_condt and vol_long_entry and arma_long_condt
+bool openShortPosition = ait_short_cond and osc_short_cond and active_short and sbbLowerCrossUnder and sbbDiffCond and svolatilityCondition and HV_short_condt and adx_short_condt and vol_short_entry and arma_short_condt
+
+bool closeLongPosition = active_long and (lbb_close == 'Lower ' ? lbbLowerCrossUnder : ta.crossunder(close, lbbMiddle))
+bool closeShortPosition = active_short and (sbb_close == 'Upper ' ? sbbUpperCrossOver : ta.crossover(close, sbbMiddle))
+
+bool validOpenLongPosition = openLongPosition and not (strategy.opentrades.size(strategy.opentrades - 1) > 0)
+bool validOpenShortPosition = openShortPosition and not (strategy.opentrades.size(strategy.opentrades - 1) < 0)
+bool longIsActive = validOpenLongPosition or strategy.opentrades.size(strategy.opentrades - 1) > 0 and not closeLongPosition
+bool shortIsActive = validOpenShortPosition or strategy.opentrades.size(strategy.opentrades - 1) < 0 and not closeShortPosition
+
+// TP/SL 계산
+longEntryPrice = strategy.opentrades.entry_price(strategy.opentrades - 1)
+shortEntryPrice = strategy.opentrades.entry_price(strategy.opentrades - 1)
+
+longTakeProfitPrice = 0.0
+longTakeProfitPrice := if (longtakeProfitMethod == "PERC ")
+    longEntryPrice * (1 + longTakeProfitPerc)
+else if (longtakeProfitMethod == "ATR ")
+    longEntryPrice + atr * longTakeProfitAtrMul
+else
+    longEntryPrice + math.max(longEntryPrice * longTakeProfitPerc, atr * longTakeProfitAtrMul)
+
+shortTakeProfitPrice = 0.0
+shortTakeProfitPrice := if (shorttakeProfitMethod == "PERC ")
+    shortEntryPrice * (1 - shortTakeProfitPerc)
+else if (shorttakeProfitMethod == "ATR ")
+    shortEntryPrice - atr * shortTakeProfitAtrMul
+else
+    shortEntryPrice - math.max(shortEntryPrice * shortTakeProfitPerc, atr * shortTakeProfitAtrMul)
+
+longTrailingTakeProfitStepTicks = longdistancePerc / syminfo.mintick
+
+shortTrailingTakeProfitStepTicks = shortdistancePerc / syminfo.mintick
+
+// Stop Loss 계산
+longStopLossPrice = 0.0
+longStopLossPrice := if (longstopLossMethod == "PERC ")
+    longEntryPrice * (1 - longTrailingStopLossPerc)
+else if (longstopLossMethod == "ATR ")
+    longEntryPrice - atr * longStopLossAtrMul
+else
+    longEntryPrice - math.max(longEntryPrice * longTrailingStopLossPerc, atr * longStopLossAtrMul)
+
+shortStopLossPrice = 0.0
+shortStopLossPrice := if (shortstopLossMethod == "PERC ")
+    shortEntryPrice * (1 + shortTrailingStopLossPerc)
+else if (shortstopLossMethod == "ATR ")
+    shortEntryPrice + atr * shortStopLossAtrMul
+else
+    shortEntryPrice + math.max(shortEntryPrice * shortTrailingStopLossPerc, atr * shortStopLossAtrMul)
+
+// Break Even
+if (longbreakEvenEnabled)
+    if (strategy.opentrades.size(strategy.opentrades - 1) > 0)
+        if (close >= longTakeProfitPrice)
+            longStopLossPrice := longEntryPrice
+
+if (shortbreakEvenEnabled)
+    if (strategy.opentrades.size(strategy.opentrades - 1) < 0)
+        if (close <= shortTakeProfitPrice)
+            shortStopLossPrice := shortEntryPrice
+
+// POSITION ORDERS
+float lot_size = validOpenLongPosition ? long_size_type(long_type) : validOpenShortPosition ? short_size_type(short_type) : na
+
+var float long_position_size = 0
+var float short_position_size = 0
+
+// 수량 계산 함수
+calc_qty(amount) =>
+    if market_type == "코인"
+        math.round(amount / close, exchange_decimal)
+    else
+        cv = final_contract_value
+        raw = amount / (close * cv)
+        stepped = math.floor(raw / futures_lot_step) * futures_lot_step
+        stepped > 0 ? stepped : futures_min_lot
+
+// LOGIC
+if (closeLongPosition)
+    strategy.close(id = 'Long Entry', comment = 'TR Long', immediately = true)
+
+if (validOpenLongPosition)
+    strategy.close(id = 'Short Entry', comment = 'TR Short', immediately = true)
+    qty = calc_qty(lot_size)
+    strategy.entry(id = 'Long Entry', direction = strategy.long, qty = qty)
+    long_position_size := qty
+
+if (longIsActive)
+    tp_qty = market_type == "코인" ? math.round(long_position_size * (longtakeProfitQuantityPerc / 100), exchange_decimal) : math.floor((long_position_size * (longtakeProfitQuantityPerc / 100)) / futures_lot_step) * futures_lot_step
+    strategy.exit(id = 'Long TP/SL', from_entry = 'Long Entry', qty = tp_qty, limit = longtakeProfitTrailingEnabled ? na : longTakeProfitPrice, stop = longStopLossPrice, trail_price = longtakeProfitTrailingEnabled ? longTakeProfitPrice : na, trail_offset = longtakeProfitTrailingEnabled ? longTrailingTakeProfitStepTicks : na, comment = 'Long TP', comment_loss = 'Long SL')
+    strategy.exit(id = 'Long Stop', from_entry = 'Long Entry', stop = longStopLossPrice, comment = 'Long Stop')
+
+if (closeShortPosition)
+    strategy.close(id = 'Short Entry', comment = 'TR Short', immediately = true)
+
+if (validOpenShortPosition)
+    strategy.close(id = 'Long Entry', comment = 'TR Long', immediately = true)
+    qty = calc_qty(lot_size)
+    strategy.entry(id = 'Short Entry', direction = strategy.short, qty = qty)
+    short_position_size := qty
+
+if (shortIsActive)
+    tp_qty = market_type == "코인" ? math.round(short_position_size * (shorttakeProfitQuantityPerc / 100), exchange_decimal) : math.floor((short_position_size * (shorttakeProfitQuantityPerc / 100)) / futures_lot_step) * futures_lot_step
+    strategy.exit(id = 'Short TP/SL', from_entry = 'Short Entry', qty = tp_qty, limit = shorttakeProfitTrailingEnabled ? na : shortTakeProfitPrice, stop = shortStopLossPrice, trail_price = shorttakeProfitTrailingEnabled ? shortTakeProfitPrice : na, trail_offset = shorttakeProfitTrailingEnabled ? shortTrailingTakeProfitStepTicks : na, comment = 'Short TP', comment_loss = 'Short SL')
+    strategy.exit(id = 'Short Stop', from_entry = 'Short Entry', stop = shortStopLossPrice, comment = 'Short Stop')
+
+// 포지션 표시
+plot(series = strategy.opentrades.entry_price(strategy.opentrades - 1), title = 'Position', color = color.gray, linewidth = 1, style = plot.style_linebr)
+plot(series = strategy.opentrades.size(strategy.opentrades - 1) > 0 ? longTakeProfitPrice : na, title = 'Long TP', color = color.new(color.teal, 20), linewidth = 1, style = plot.style_linebr)
+plot(series = strategy.opentrades.size(strategy.opentrades - 1) > 0 ? longStopLossPrice : na, title = 'Long SL', color = color.new(color.maroon, 20), linewidth = 1, style = plot.style_linebr)
+plot(series = strategy.opentrades.size(strategy.opentrades - 1) < 0 ? shortTakeProfitPrice : na, title = 'Short TP', color = color.new(color.teal, 20), linewidth = 1, style = plot.style_linebr)
+plot(series = strategy.opentrades.size(strategy.opentrades - 1) < 0 ? shortStopLossPrice : na, title = 'Short SL', color = color.new(color.maroon, 20), linewidth = 1, style = plot.style_linebr)
+
+// ============================
+// 대시보드 (간소화 버전)
+// ============================
+show_performance = input.bool(true, "월별 성과표", group="대시보드")
+performance_table_position = input.string('bottom_right', '성과표 위치', options=['top_left', 'top_center', 'top_right', 'middle_left', 'middle_center', 'middle_right', 'bottom_left', 'bottom_center', 'bottom_right'], group="대시보드")
+performance_text_size = input.string('small', '성과표 크기', options=['tiny', 'small', 'normal'], group="대시보드")
+
+show_setting = input.bool(true, "설정값 뷰", group="대시보드")
+setting_table_position = input.string('top_right', '설정값 위치', options=['top_left', 'top_center', 'top_right', 'middle_left', 'middle_center', 'middle_right', 'bottom_left', 'bottom_center', 'bottom_right'], group="대시보드")
+setting_text_size = input.string('tiny', '설정값 크기', options=['tiny', 'small', 'normal'], group="대시보드")
+
+// 월별 성과 (간단 버전)
+if show_performance
+    cur_month_pnl = strategy.equity / strategy.initial_capital - 1
+    cur_year_pnl = strategy.equity / strategy.initial_capital - 1
+    
+    new_month = month(time) != month(time[1])
+    new_year = year(time) != year(time[1])
+    
+    var month_pnl = array.new_float(0)
+    var month_time = array.new_int(0)
+    var year_pnl = array.new_float(0)
+    var year_time = array.new_int(0)
+    var last_computed = false
+    
+    if (not na(cur_month_pnl[1]) and (new_month or barstate.islastconfirmedhistory))
+        if (last_computed[1])
+            array.pop(month_pnl)
+            array.pop(month_time)
+        array.push(month_pnl, cur_month_pnl[1])
+        array.push(month_time, time[1])
+    
+    if (not na(cur_year_pnl[1]) and (new_year or barstate.islastconfirmedhistory))
+        if (last_computed[1])
+            array.pop(year_pnl)
+            array.pop(year_time)
+        array.push(year_pnl, cur_year_pnl[1])
+        array.push(year_time, time[1])
+    
+    last_computed := barstate.islastconfirmedhistory ? true : nz(last_computed[1])
+    
+    var monthly_table = table(na)
+    
+    if (barstate.islastconfirmedhistory)
+        monthly_table := table.new(performance_table_position, columns = 14, rows = array.size(year_pnl) + 1, border_width = 1)
+        
+        table.cell(monthly_table, 0, 0, "월별(%)\n\n년도별", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 1, 0, "1월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 2, 0, "2월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 3, 0, "3월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 4, 0, "4월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 5, 0, "5월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 6, 0, "6월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 7, 0, "7월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 8, 0, "8월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 9, 0, "9월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 10, 0, "10월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 11, 0, "11월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 12, 0, "12월", text_size=performance_text_size, bgcolor = color.gray)
+        table.cell(monthly_table, 13, 0, "년합계", text_size=performance_text_size, bgcolor = color.gray)
+        
+        for yi = 0 to array.size(year_pnl) - 1
+            table.cell(monthly_table, 0, yi + 1, str.tostring(year(array.get(year_time, yi))), text_size=performance_text_size, bgcolor = color.gray)
+            y_color = array.get(year_pnl, yi) > 0 ? color.new(color.rgb(0, 170, 23, 1), 40) : color.new(color.rgb(253, 59, 59), 40)
+            table.cell(monthly_table, 13, yi + 1, str.tostring(math.round(array.get(year_pnl, yi) * 100, 2)), bgcolor = y_color, text_size=performance_text_size, text_color=color.white)
+        
+        for mi = 0 to array.size(month_time) - 1
+            m_row = year(array.get(month_time, mi)) - year(array.get(year_time, 0)) + 1
+            m_col = month(array.get(month_time, mi))
+            m_color = array.get(month_pnl, mi) > 0 ? color.new(color.rgb(42, 139, 130), 40) : color.new(color.rgb(255, 113, 113), 40)
+            table.cell(monthly_table, m_col, m_row, str.tostring(math.round(array.get(month_pnl, mi) * 100, 2)), bgcolor = m_color, text_size=performance_text_size, text_color=color.white)
+
+// 설정값 뷰 (간소화)
+var setting_Table = table.new(setting_table_position, columns=2, rows=8, border_width=1, bgcolor=color.black, border_color=color.gray)
+
+if show_setting
+    table.cell(setting_Table, 0, 0, '구분', text_size=setting_text_size, text_color=color.white)
+    table.cell(setting_Table, 1, 0, "볼린져밴드 선물전용 Full", text_size=setting_text_size, text_color=color.yellow)
+    
+    table.cell(setting_Table, 0, 1, '시장/계약가치', text_size=setting_text_size, text_color=color.white)
+    table.cell(setting_Table, 1, 1, market_type + " / " + str.tostring(final_contract_value) + "\n" + syminfo.ticker, text_size=setting_text_size, text_color=color.yellow)
+    
+    table.cell(setting_Table, 0, 2, '자본', text_size=setting_text_size, text_color=color.white)
+    table.cell(setting_Table, 1, 2, str.tostring(math.round(sumcapital, 2)), text_size=setting_text_size, text_color=color.yellow)
+    
+    table.cell(setting_Table, 0, 3, '현재 포지션', text_size=setting_text_size, text_color=color.white)
+    pos_text = strategy.position_size > 0 ? "롱 " + str.tostring(strategy.position_size) : strategy.position_size < 0 ? "숏 " + str.tostring(math.abs(strategy.position_size)) : "없음"
+    table.cell(setting_Table, 1, 3, pos_text, text_size=setting_text_size, text_color=strategy.position_size > 0 ? color.green : strategy.position_size < 0 ? color.red : color.gray)
+    
+    table.cell(setting_Table, 0, 4, '거래 횟수', text_size=setting_text_size, text_color=color.white)
+    table.cell(setting_Table, 1, 4, str.tostring(strategy.closedtrades), text_size=setting_text_size, text_color=color.yellow)
+    
+    table.cell(setting_Table, 0, 5, '승률', text_size=setting_text_size, text_color=color.white)
+    winrate = strategy.closedtrades > 0 ? (strategy.wintrades / strategy.closedtrades) * 100 : 0
+    table.cell(setting_Table, 1, 5, str.tostring(math.round(winrate, 2)) + "%", text_size=setting_text_size, text_color=winrate > 50 ? color.green : color.red)
+    
+    table.cell(setting_Table, 0, 6, '순이익', text_size=setting_text_size, text_color=color.white)
+    table.cell(setting_Table, 1, 6, str.tostring(math.round(strategy.netprofit, 2)), text_size=setting_text_size, text_color=strategy.netprofit > 0 ? color.green : color.red)
+    
+    table.cell(setting_Table, 0, 7, '수익률', text_size=setting_text_size, text_color=color.white)
+    profit_perc = (strategy.netprofit / strategy.initial_capital) * 100
+    table.cell(setting_Table, 1, 7, str.tostring(math.round(profit_perc, 2)) + "%", text_size=setting_text_size, text_color=profit_perc > 0 ? color.green : color.red)
+

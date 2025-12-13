@@ -1,0 +1,107 @@
+//@version=6
+// UT Bot Strategy (EA 매칭용) - TradingView 전략 버전
+// - 전략 테스터에서 거래목록 CSV 내보내기 지원
+// - EA와 동일한 파라미터/로직(ATR Trailing Stop, EMA(1)=src)로 구성
+// - 목적: 바-바 신호 일치 검증 및 결과 재현
+
+strategy(title="UT Bot Strategy (EA Matching)", shorttitle="UT Bot Strgy (EA)", overlay=true, initial_capital=10000, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.0, calc_on_every_tick=false, calc_on_order_fills=true, process_orders_on_close=true)
+
+//======================== 입력값 ========================
+// 한글 주석: EA와 동일한 입력들을 전략에도 반영하여 수치 일치성을 높임
+// 민감도/기간
+keyValue      = input.float(1.0,  "KeyValue (ATR 배수)", minval=0.0001, step=0.1)
+atrPeriod     = input.int(10,     "ATR Period",     minval=1)
+maPeriod      = input.int(1,      "EMA Period (고정 1 권장)", minval=1)
+
+// 소스 가격 선택 (EA의 PriceSource와 동일 개념)
+priceSourceOpt = input.string("Close", "Price Source", options=["Close", "Heikin Ashi Close", "Typical Price (H+L+C)/3", "Median Price (H+L)/2"])
+
+// 매매 방향/역포지션 처리
+tradeLong     = input.bool(true,  "매수 허용(전략)")
+tradeShort    = input.bool(true,  "매도 허용(전략)")
+reversePos    = input.bool(true,  "반대 신호 시 포지션 전환")
+
+// SL/TP (ATR 기반)
+useExitATR    = input.bool(true,  "ATR 기반 SL/TP 사용")
+initStopATR   = input.float(1.5,  "초기 손절(ATR 배수)", minval=0.1, step=0.1)
+takeProfitATR = input.float(2.0,  "초기 익절(ATR 배수)", minval=0.1, step=0.1)
+
+// 시각화
+showArrows    = input.bool(true,  "화살표 표시")
+buyColor      = input.color(color.lime, "매수 화살표 색")
+sellColor     = input.color(color.red,  "매도 화살표 색")
+
+//======================== 소스 계산 ========================
+// 한글 주석: EA와 동일하게 EMA(1) == src 이므로, src 자체는 선택된 가격소스
+var float srcPrice = na
+if priceSourceOpt == "Close"
+    srcPrice := close
+else if priceSourceOpt == "Heikin Ashi Close"
+    // EA에서 사용한 단순형 HA Close: (O+H+L+C)/4
+    srcPrice := (open + high + low + close)/4.0
+else if priceSourceOpt == "Typical Price (H+L+C)/3"
+    srcPrice := (high + low + close)/3.0
+else if priceSourceOpt == "Median Price (H+L)/2"
+    srcPrice := (high + low)/2.0
+
+// EMA(1)은 src와 동일값이므로, 명시적으로 유지
+emaCur = ta.ema(srcPrice, maPeriod)
+
+atrVal = ta.atr(atrPeriod)
+nLoss  = atrVal * keyValue
+
+//======================== ATR Trailing Stop (Pine 원식) ========================
+// 한글 주석: UT Bot 공개 로직에서 사용하는 3단계 갱신 규칙을 그대로 구현
+var float xATRTrailingStop = na
+prevStop = nz(xATRTrailingStop[1], 0)
+
+iff_1 = emaCur > prevStop ? emaCur - nLoss : emaCur + nLoss
+iff_2 = (emaCur < prevStop and emaCur[1] < prevStop) ? math.min(prevStop, emaCur + nLoss) : iff_1
+xATRTrailingStop := (emaCur > prevStop and emaCur[1] > prevStop) ? math.max(prevStop, emaCur - nLoss) : iff_2
+
+above = ta.crossover(emaCur, xATRTrailingStop)
+below = ta.crossunder(emaCur, xATRTrailingStop)
+
+buySignal  = emaCur > xATRTrailingStop and above
+sellSignal = emaCur < xATRTrailingStop and below
+
+//======================== 전략 엔트리/청산 ========================
+// 한글 주석: 반대 신호 시 포지션 전환 옵션 지원
+if buySignal and tradeLong
+    if reversePos and strategy.position_size < 0
+        strategy.close("Short")
+    strategy.entry("Long", strategy.long)
+
+if sellSignal and tradeShort
+    if reversePos and strategy.position_size > 0
+        strategy.close("Long")
+    strategy.entry("Short", strategy.short)
+
+// SL/TP: ATR 기준 고정폭 (초기 매수/매도 각각 별도로 계산)
+if useExitATR
+    longSL  = emaCur - atrVal * initStopATR
+    longTP  = emaCur + atrVal * takeProfitATR
+    shortSL = emaCur + atrVal * initStopATR
+    shortTP = emaCur - atrVal * takeProfitATR
+    strategy.exit("L-Exit", from_entry="Long",  stop=longSL,  limit=longTP)
+    strategy.exit("S-Exit", from_entry="Short", stop=shortSL, limit=shortTP)
+
+//======================== 시각화 & 알림 ========================
+plot(xATRTrailingStop, title="ATR Trailing Stop", color=color.new(color.orange, 0), linewidth=2)
+plot(emaCur,            title="EMA(src,1)",      color=color.new(color.teal,   0), linewidth=1)
+
+plotshape(showArrows and buySignal,  title="BUY",  style=shape.triangleup,   location=location.belowbar, color=buyColor,  size=size.tiny, text="BUY")
+plotshape(showArrows and sellSignal, title="SELL", style=shape.triangledown, location=location.abovebar, color=sellColor, size=size.tiny, text="SELL")
+
+alertcondition(buySignal,  title="UT Bot BUY",  message="BUY: {{ticker}} {{interval}} @ {{close}}")
+alertcondition(sellSignal, title="UT Bot SELL", message="SELL: {{ticker}} {{interval}} @ {{close}}")
+
+//======================== 디버그(차트 좌측 상단) ========================
+// 한글 주석: EA와의 수치 비교를 위해 핵심 값 표시
+var label dbg = na
+if barstate.islast
+    label.delete(dbg)
+    txt = str.format("UT Bot Strategy (EA)\nsrc={0}  stop={1}\nATR={2}  k={3}  n={4}", emaCur, xATRTrailingStop, atrVal, keyValue, atrPeriod)
+    dbg := label.new(bar_index, high, txt, textcolor=color.white, color=color.new(color.black, 80), style=label.style_label_left)
+
+

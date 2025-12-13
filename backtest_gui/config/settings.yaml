@@ -1,0 +1,17 @@
+# 기본 설정
+
+# 백테스트 기본 기간
+default_start_date: "2023-01-01"
+default_end_date: "2024-12-31"
+
+# 최적화 기본 설정
+optimization:
+  method: "grid_search"  # grid_search 또는 random_search
+  max_combinations: 1000  # random_search 최대 조합 수
+  min_trades: 10  # 최소 거래 횟수
+
+# 결과 표시
+results:
+  max_display: 100  # 최대 표시 결과 수
+  sort_by: "total_return"  # 정렬 기준
+

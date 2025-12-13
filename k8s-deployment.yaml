@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ut-parallel-backtest
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ut-parallel-backtest
+  template:
+    metadata:
+      labels:
+        app: ut-parallel-backtest
+    spec:
+      containers:
+      - name: backtest
+        image: ut-parallel-backtest:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PROMETHEUS_PORT
+          value: "8001"
+        ports:
+        - containerPort: 5000
+        - containerPort: 8001
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "2Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
+
